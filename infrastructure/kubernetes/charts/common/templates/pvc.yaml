@@ -1,0 +1,202 @@
+{{- /*
+Template for creating PersistentVolumeClaims (PVCs) for MCA Application Processing System microservices.
+
+This template provides a reusable definition for persistent storage that can be used by various
+services including PostgreSQL, RabbitMQ, and Redis. It supports different storage classes,
+access modes, and size configurations based on the service requirements and environment.
+
+Usage:
+```yaml
+# In your service's values.yaml
+persistentVolume:
+  enabled: true
+  storageClass: "standard" # or "premium-rwo" for production
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/aws-ebs
+```
+
+Then in your service's templates:
+```yaml
+{{- include "common.pvc" (dict "Release" .Release "Values" .Values "name" "your-service-data") -}}
+```
+*/ -}}
+
+{{- define "common.pvc" -}}
+{{- $root := . -}}
+{{- $name := .name -}}
+{{- $fullname := include "common.fullname" . -}}
+{{- $pvcName := printf "%s-%s" $fullname $name -}}
+{{- if .Values.persistentVolume.enabled -}}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ $pvcName }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+  {{- with .Values.persistentVolume.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.persistentVolume.accessModes }}
+    - {{ . }}
+    {{- end }}
+  {{- if .Values.persistentVolume.storageClass }}
+  {{- if (eq "-" .Values.persistentVolume.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistentVolume.storageClass }}
+  {{- end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistentVolume.size | quote }}
+  {{- if .Values.persistentVolume.selector }}
+  selector:
+    {{- toYaml .Values.persistentVolume.selector | nindent 4 }}
+  {{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+Template for creating PersistentVolumeClaims with specific configurations for different environments.
+
+This template extends the common.pvc template with environment-specific defaults for storage classes
+and other parameters. It automatically selects appropriate storage classes and configurations based
+on the current environment (development, staging, production).
+
+Usage:
+```yaml
+# In your service's templates
+{{- include "common.pvc.withDefaults" (dict "Release" .Release "Values" .Values "name" "your-service-data" "environment" .Values.global.environment) -}}
+```
+*/ -}}
+
+{{- define "common.pvc.withDefaults" -}}
+{{- $root := . -}}
+{{- $name := .name -}}
+{{- $environment := .environment | default "development" -}}
+{{- $storageClass := .Values.persistentVolume.storageClass -}}
+
+{{- if not $storageClass -}}
+  {{- if eq $environment "production" -}}
+    {{- $_ := set .Values.persistentVolume "storageClass" "premium-rwo" -}}
+  {{- else if eq $environment "staging" -}}
+    {{- $_ := set .Values.persistentVolume "storageClass" "standard" -}}
+  {{- else -}}
+    {{- $_ := set .Values.persistentVolume "storageClass" "standard" -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if not .Values.persistentVolume.accessModes -}}
+  {{- $_ := set .Values.persistentVolume "accessModes" (list "ReadWriteOnce") -}}
+{{- end -}}
+
+{{- if not .Values.persistentVolume.size -}}
+  {{- if eq $name "postgresql-data" -}}
+    {{- if eq $environment "production" -}}
+      {{- $_ := set .Values.persistentVolume "size" "100Gi" -}}
+    {{- else if eq $environment "staging" -}}
+      {{- $_ := set .Values.persistentVolume "size" "50Gi" -}}
+    {{- else -}}
+      {{- $_ := set .Values.persistentVolume "size" "10Gi" -}}
+    {{- end -}}
+  {{- else if eq $name "rabbitmq-data" -}}
+    {{- if eq $environment "production" -}}
+      {{- $_ := set .Values.persistentVolume "size" "50Gi" -}}
+    {{- else if eq $environment "staging" -}}
+      {{- $_ := set .Values.persistentVolume "size" "20Gi" -}}
+    {{- else -}}
+      {{- $_ := set .Values.persistentVolume "size" "5Gi" -}}
+    {{- end -}}
+  {{- else if eq $name "redis-data" -}}
+    {{- if eq $environment "production" -}}
+      {{- $_ := set .Values.persistentVolume "size" "20Gi" -}}
+    {{- else if eq $environment "staging" -}}
+      {{- $_ := set .Values.persistentVolume "size" "10Gi" -}}
+    {{- else -}}
+      {{- $_ := set .Values.persistentVolume "size" "1Gi" -}}
+    {{- end -}}
+  {{- else -}}
+    {{- $_ := set .Values.persistentVolume "size" "10Gi" -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if not .Values.persistentVolume.annotations -}}
+  {{- $annotations := dict -}}
+  
+  {{- if eq $environment "production" -}}
+    {{- $_ := set $annotations "volume.kubernetes.io/storage-provisioner" "kubernetes.io/aws-ebs" -}}
+    {{- $_ := set $annotations "volume.beta.kubernetes.io/storage-class" "premium-rwo" -}}
+    {{- $_ := set $annotations "volume.kubernetes.io/storage-encryption" "true" -}}
+  {{- else if eq $environment "staging" -}}
+    {{- $_ := set $annotations "volume.kubernetes.io/storage-provisioner" "kubernetes.io/aws-ebs" -}}
+    {{- $_ := set $annotations "volume.beta.kubernetes.io/storage-class" "standard" -}}
+  {{- end -}}
+  
+  {{- $_ := set .Values.persistentVolume "annotations" $annotations -}}
+{{- end -}}
+
+{{- include "common.pvc" . -}}
+{{- end -}}
+
+{{- /*
+Template for creating PersistentVolumeClaims specifically for backup storage.
+
+This template is optimized for backup storage with appropriate storage classes,
+access modes, and retention policies. It's designed for use with backup jobs
+and cronjobs that need persistent storage for backup data.
+
+Usage:
+```yaml
+# In your backup job's templates
+{{- include "common.pvc.backup" (dict "Release" .Release "Values" .Values "name" "backup-storage" "retentionDays" 30) -}}
+```
+*/ -}}
+
+{{- define "common.pvc.backup" -}}
+{{- $root := . -}}
+{{- $name := .name -}}
+{{- $retentionDays := .retentionDays | default 30 -}}
+{{- $environment := .environment | default "development" -}}
+
+{{- if not .Values.persistentVolume -}}
+  {{- $_ := set .Values "persistentVolume" (dict "enabled" true) -}}
+{{- end -}}
+
+{{- $_ := set .Values.persistentVolume "enabled" true -}}
+{{- $_ := set .Values.persistentVolume "accessModes" (list "ReadWriteMany") -}}
+
+{{- if eq $environment "production" -}}
+  {{- $_ := set .Values.persistentVolume "storageClass" "efs-sc" -}}
+  {{- $_ := set .Values.persistentVolume "size" "500Gi" -}}
+{{- else if eq $environment "staging" -}}
+  {{- $_ := set .Values.persistentVolume "storageClass" "efs-sc" -}}
+  {{- $_ := set .Values.persistentVolume "size" "200Gi" -}}
+{{- else -}}
+  {{- $_ := set .Values.persistentVolume "storageClass" "standard" -}}
+  {{- $_ := set .Values.persistentVolume "size" "50Gi" -}}
+{{- end -}}
+
+{{- $annotations := dict -}}
+{{- $_ := set $annotations "backup.kubernetes.io/deltas" "PT1H P1D P7D P30D" -}}
+{{- $_ := set $annotations "backup.kubernetes.io/retention-days" (printf "%d" $retentionDays) -}}
+
+{{- if eq $environment "production" -}}
+  {{- $_ := set $annotations "volume.kubernetes.io/storage-provisioner" "kubernetes.io/aws-efs" -}}
+  {{- $_ := set $annotations "volume.kubernetes.io/backup-policy" "daily" -}}
+  {{- $_ := set $annotations "volume.kubernetes.io/storage-encryption" "true" -}}
+{{- else if eq $environment "staging" -}}
+  {{- $_ := set $annotations "volume.kubernetes.io/storage-provisioner" "kubernetes.io/aws-efs" -}}
+  {{- $_ := set $annotations "volume.kubernetes.io/backup-policy" "daily" -}}
+{{- end -}}
+
+{{- $_ := set .Values.persistentVolume "annotations" $annotations -}}
+
+{{- include "common.pvc" . -}}
+{{- end -}}

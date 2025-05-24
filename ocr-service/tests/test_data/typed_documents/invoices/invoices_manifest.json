@@ -1,0 +1,1312 @@
+{
+  "version": "1.0.0",
+  "description": "Test manifest for invoice documents used in OCR Service validation",
+  "last_updated": "2025-05-23",
+  "total_documents": 30,
+  "accuracy_target": 99.0,
+  "documents": {
+    "vendor_manufacturing_hq_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "vendor",
+      "industry": "manufacturing",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "INV-2025-0042",
+          "position": [0.15, 0.12, 0.35, 0.15],
+          "expected_confidence": 0.98
+        },
+        "invoice_date": {
+          "value": "2025-04-15",
+          "position": [0.65, 0.12, 0.85, 0.15],
+          "expected_confidence": 0.97
+        },
+        "due_date": {
+          "value": "2025-05-15",
+          "position": [0.65, 0.16, 0.85, 0.19],
+          "expected_confidence": 0.97
+        },
+        "vendor_name": {
+          "value": "Industrial Supplies Co.",
+          "position": [0.10, 0.05, 0.50, 0.08],
+          "expected_confidence": 0.99
+        },
+        "vendor_address": {
+          "value": "123 Factory Lane, Industrial Park, MI 48001",
+          "position": [0.10, 0.08, 0.50, 0.11],
+          "expected_confidence": 0.95
+        },
+        "vendor_phone": {
+          "value": "(555) 123-4567",
+          "position": [0.10, 0.11, 0.30, 0.14],
+          "expected_confidence": 0.96
+        },
+        "vendor_email": {
+          "value": "billing@industrialsupplies.com",
+          "position": [0.10, 0.14, 0.50, 0.17],
+          "expected_confidence": 0.94
+        },
+        "customer_name": {
+          "value": "Acme Manufacturing Inc.",
+          "position": [0.60, 0.20, 0.90, 0.23],
+          "expected_confidence": 0.98
+        },
+        "customer_address": {
+          "value": "789 Production Ave, Detroit, MI 48226",
+          "position": [0.60, 0.23, 0.90, 0.26],
+          "expected_confidence": 0.94
+        },
+        "customer_id": {
+          "value": "ACME-10042",
+          "position": [0.60, 0.26, 0.80, 0.29],
+          "expected_confidence": 0.97
+        },
+        "subtotal": {
+          "value": "4250.00",
+          "position": [0.80, 0.70, 0.90, 0.73],
+          "expected_confidence": 0.99
+        },
+        "tax": {
+          "value": "255.00",
+          "position": [0.80, 0.73, 0.90, 0.76],
+          "expected_confidence": 0.99
+        },
+        "shipping": {
+          "value": "125.00",
+          "position": [0.80, 0.76, 0.90, 0.79],
+          "expected_confidence": 0.98
+        },
+        "total": {
+          "value": "4630.00",
+          "position": [0.80, 0.80, 0.90, 0.83],
+          "expected_confidence": 0.99
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.85, 0.30, 0.88],
+          "expected_confidence": 0.95
+        },
+        "currency": {
+          "value": "USD",
+          "position": [0.75, 0.80, 0.79, 0.83],
+          "expected_confidence": 0.99
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "SKU-1234",
+          "description": "Industrial Grade Bearings",
+          "quantity": "50",
+          "unit_price": "45.00",
+          "amount": "2250.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.97
+        },
+        {
+          "item_number": "SKU-5678",
+          "description": "High-Tensile Steel Bolts",
+          "quantity": "200",
+          "unit_price": "5.00",
+          "amount": "1000.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.96
+        },
+        {
+          "item_number": "SKU-9012",
+          "description": "Hydraulic Fluid (5 Gal)",
+          "quantity": "10",
+          "unit_price": "100.00",
+          "amount": "1000.00",
+          "position": [0.10, 0.48, 0.90, 0.52],
+          "expected_confidence": 0.98
+        }
+      ],
+      "expected_processing_time_ms": 1200
+    },
+    "service_technology_lq_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "service",
+      "industry": "technology",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "SVC-2025-1187",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.92
+        },
+        "invoice_date": {
+          "value": "2025-05-01",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.91
+        },
+        "due_date": {
+          "value": "2025-05-31",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.90
+        },
+        "vendor_name": {
+          "value": "TechSolutions Inc.",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.94
+        },
+        "vendor_address": {
+          "value": "456 Innovation Way, San Francisco, CA 94107",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.88
+        },
+        "vendor_phone": {
+          "value": "(555) 987-6543",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.90
+        },
+        "vendor_email": {
+          "value": "accounts@techsolutions.com",
+          "position": [0.10, 0.14, 0.50, 0.17],
+          "expected_confidence": 0.89
+        },
+        "customer_name": {
+          "value": "Global Retail Enterprises",
+          "position": [0.60, 0.20, 0.90, 0.23],
+          "expected_confidence": 0.93
+        },
+        "customer_address": {
+          "value": "1000 Commerce Blvd, Chicago, IL 60601",
+          "position": [0.60, 0.23, 0.90, 0.26],
+          "expected_confidence": 0.87
+        },
+        "customer_id": {
+          "value": "GRE-5001",
+          "position": [0.60, 0.26, 0.80, 0.29],
+          "expected_confidence": 0.92
+        },
+        "subtotal": {
+          "value": "8500.00",
+          "position": [0.80, 0.70, 0.90, 0.73],
+          "expected_confidence": 0.94
+        },
+        "tax": {
+          "value": "722.50",
+          "position": [0.80, 0.73, 0.90, 0.76],
+          "expected_confidence": 0.93
+        },
+        "total": {
+          "value": "9222.50",
+          "position": [0.80, 0.76, 0.90, 0.79],
+          "expected_confidence": 0.95
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.85, 0.30, 0.88],
+          "expected_confidence": 0.90
+        },
+        "currency": {
+          "value": "USD",
+          "position": [0.75, 0.76, 0.79, 0.79],
+          "expected_confidence": 0.94
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "CLOUD-001",
+          "description": "Cloud Infrastructure Services - Monthly",
+          "quantity": "1",
+          "unit_price": "3500.00",
+          "amount": "3500.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.91
+        },
+        {
+          "item_number": "DEV-100",
+          "description": "Software Development - Senior Engineer",
+          "quantity": "40",
+          "unit_price": "125.00",
+          "amount": "5000.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.89
+        }
+      ],
+      "expected_processing_time_ms": 1800
+    },
+    "retail_food_skewed_01.jpeg": {
+      "document_type": "invoice",
+      "invoice_type": "retail",
+      "industry": "food",
+      "quality": "medium",
+      "orientation": "skewed",
+      "skew_angle": 7.5,
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "receipt_number": {
+          "value": "REC-78901",
+          "position": [0.40, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.88
+        },
+        "date": {
+          "value": "2025-05-10",
+          "position": [0.40, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.87
+        },
+        "time": {
+          "value": "14:32:45",
+          "position": [0.40, 0.11, 0.60, 0.14],
+          "expected_confidence": 0.86
+        },
+        "store_name": {
+          "value": "Fresh Market Grocery",
+          "position": [0.20, 0.02, 0.80, 0.05],
+          "expected_confidence": 0.92
+        },
+        "store_address": {
+          "value": "555 Organic Lane, Portland, OR 97201",
+          "position": [0.20, 0.05, 0.80, 0.08],
+          "expected_confidence": 0.85
+        },
+        "store_phone": {
+          "value": "(555) 234-5678",
+          "position": [0.30, 0.08, 0.70, 0.11],
+          "expected_confidence": 0.87
+        },
+        "cashier": {
+          "value": "Sarah J.",
+          "position": [0.10, 0.14, 0.30, 0.17],
+          "expected_confidence": 0.89
+        },
+        "subtotal": {
+          "value": "43.75",
+          "position": [0.70, 0.70, 0.90, 0.73],
+          "expected_confidence": 0.93
+        },
+        "tax": {
+          "value": "3.94",
+          "position": [0.70, 0.73, 0.90, 0.76],
+          "expected_confidence": 0.92
+        },
+        "total": {
+          "value": "47.69",
+          "position": [0.70, 0.76, 0.90, 0.79],
+          "expected_confidence": 0.94
+        },
+        "payment_method": {
+          "value": "Credit Card - VISA",
+          "position": [0.50, 0.82, 0.90, 0.85],
+          "expected_confidence": 0.88
+        },
+        "card_last_four": {
+          "value": "4321",
+          "position": [0.70, 0.85, 0.90, 0.88],
+          "expected_confidence": 0.90
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "PRD-1122",
+          "description": "Organic Apples",
+          "quantity": "2 lb",
+          "unit_price": "3.99",
+          "amount": "7.98",
+          "position": [0.10, 0.30, 0.90, 0.33],
+          "expected_confidence": 0.86
+        },
+        {
+          "item_number": "PRD-3344",
+          "description": "Free Range Eggs",
+          "quantity": "1 dozen",
+          "unit_price": "5.49",
+          "amount": "5.49",
+          "position": [0.10, 0.33, 0.90, 0.36],
+          "expected_confidence": 0.85
+        },
+        {
+          "item_number": "PRD-5566",
+          "description": "Artisan Sourdough Bread",
+          "quantity": "1",
+          "unit_price": "6.99",
+          "amount": "6.99",
+          "position": [0.10, 0.36, 0.90, 0.39],
+          "expected_confidence": 0.87
+        },
+        {
+          "item_number": "PRD-7788",
+          "description": "Grass-fed Ground Beef",
+          "quantity": "1 lb",
+          "unit_price": "8.99",
+          "amount": "8.99",
+          "position": [0.10, 0.39, 0.90, 0.42],
+          "expected_confidence": 0.84
+        },
+        {
+          "item_number": "PRD-9900",
+          "description": "Organic Baby Spinach",
+          "quantity": "1 bag",
+          "unit_price": "4.49",
+          "amount": "4.49",
+          "position": [0.10, 0.42, 0.90, 0.45],
+          "expected_confidence": 0.83
+        },
+        {
+          "item_number": "PRD-1357",
+          "description": "Local Honey",
+          "quantity": "1 jar",
+          "unit_price": "9.99",
+          "amount": "9.99",
+          "position": [0.10, 0.45, 0.90, 0.48],
+          "expected_confidence": 0.85
+        }
+      ],
+      "expected_processing_time_ms": 2200
+    },
+    "utility_energy_noisy_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "utility",
+      "industry": "energy",
+      "quality": "low",
+      "orientation": "portrait",
+      "noise_level": "high",
+      "page_count": 2,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "UTIL-2025-56789",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.85
+        },
+        "invoice_date": {
+          "value": "2025-05-05",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.84
+        },
+        "due_date": {
+          "value": "2025-05-25",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.83
+        },
+        "account_number": {
+          "value": "ACCT-10056782",
+          "position": [0.70, 0.19, 0.90, 0.22],
+          "expected_confidence": 0.86
+        },
+        "utility_provider": {
+          "value": "PowerGrid Energy",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.90
+        },
+        "provider_address": {
+          "value": "789 Electric Avenue, Houston, TX 77002",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.82
+        },
+        "provider_phone": {
+          "value": "(555) 456-7890",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.84
+        },
+        "customer_name": {
+          "value": "Downtown Office Complex",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.88
+        },
+        "customer_address": {
+          "value": "100 Business Plaza, Houston, TX 77002",
+          "position": [0.60, 0.25, 0.90, 0.28],
+          "expected_confidence": 0.81
+        },
+        "service_period": {
+          "value": "2025-04-01 to 2025-04-30",
+          "position": [0.10, 0.30, 0.50, 0.33],
+          "expected_confidence": 0.83
+        },
+        "previous_reading": {
+          "value": "45678 kWh",
+          "position": [0.60, 0.33, 0.90, 0.36],
+          "expected_confidence": 0.85
+        },
+        "current_reading": {
+          "value": "48234 kWh",
+          "position": [0.60, 0.36, 0.90, 0.39],
+          "expected_confidence": 0.85
+        },
+        "usage": {
+          "value": "2556 kWh",
+          "position": [0.60, 0.39, 0.90, 0.42],
+          "expected_confidence": 0.87
+        },
+        "rate": {
+          "value": "0.142 per kWh",
+          "position": [0.60, 0.42, 0.90, 0.45],
+          "expected_confidence": 0.84
+        },
+        "energy_charges": {
+          "value": "362.95",
+          "position": [0.70, 0.50, 0.90, 0.53],
+          "expected_confidence": 0.88
+        },
+        "delivery_charges": {
+          "value": "102.24",
+          "position": [0.70, 0.53, 0.90, 0.56],
+          "expected_confidence": 0.87
+        },
+        "taxes": {
+          "value": "41.87",
+          "position": [0.70, 0.56, 0.90, 0.59],
+          "expected_confidence": 0.86
+        },
+        "total": {
+          "value": "507.06",
+          "position": [0.70, 0.62, 0.90, 0.65],
+          "expected_confidence": 0.89
+        },
+        "payment_terms": {
+          "value": "Due upon receipt",
+          "position": [0.10, 0.85, 0.50, 0.88],
+          "expected_confidence": 0.82
+        }
+      },
+      "expected_processing_time_ms": 2800
+    },
+    "equipment_construction_faded_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "equipment",
+      "industry": "construction",
+      "quality": "low",
+      "orientation": "portrait",
+      "fading_level": "high",
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "EQ-2025-3456",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.82
+        },
+        "invoice_date": {
+          "value": "2025-04-28",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.81
+        },
+        "due_date": {
+          "value": "2025-05-28",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.80
+        },
+        "vendor_name": {
+          "value": "Heavy Equipment Rentals",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.85
+        },
+        "vendor_address": {
+          "value": "2000 Construction Way, Denver, CO 80202",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.78
+        },
+        "vendor_phone": {
+          "value": "(555) 789-0123",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.80
+        },
+        "customer_name": {
+          "value": "Skyline Builders LLC",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.84
+        },
+        "customer_address": {
+          "value": "500 Development Road, Denver, CO 80203",
+          "position": [0.60, 0.25, 0.90, 0.28],
+          "expected_confidence": 0.77
+        },
+        "customer_id": {
+          "value": "SBL-7890",
+          "position": [0.60, 0.28, 0.80, 0.31],
+          "expected_confidence": 0.82
+        },
+        "rental_period": {
+          "value": "2025-04-15 to 2025-04-28",
+          "position": [0.10, 0.31, 0.50, 0.34],
+          "expected_confidence": 0.79
+        },
+        "subtotal": {
+          "value": "5850.00",
+          "position": [0.70, 0.70, 0.90, 0.73],
+          "expected_confidence": 0.85
+        },
+        "tax": {
+          "value": "468.00",
+          "position": [0.70, 0.73, 0.90, 0.76],
+          "expected_confidence": 0.84
+        },
+        "delivery_fee": {
+          "value": "350.00",
+          "position": [0.70, 0.76, 0.90, 0.79],
+          "expected_confidence": 0.83
+        },
+        "total": {
+          "value": "6668.00",
+          "position": [0.70, 0.82, 0.90, 0.85],
+          "expected_confidence": 0.86
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.85, 0.30, 0.88],
+          "expected_confidence": 0.78
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "BLDZ-450",
+          "description": "Bulldozer - CAT D6",
+          "quantity": "7 days",
+          "unit_price": "450.00",
+          "amount": "3150.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.81
+        },
+        {
+          "item_number": "EXCV-350",
+          "description": "Excavator - Komatsu PC210",
+          "quantity": "5 days",
+          "unit_price": "380.00",
+          "amount": "1900.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.79
+        },
+        {
+          "item_number": "GENR-100",
+          "description": "Generator - Industrial 50kW",
+          "quantity": "8 days",
+          "unit_price": "100.00",
+          "amount": "800.00",
+          "position": [0.10, 0.48, 0.90, 0.52],
+          "expected_confidence": 0.80
+        }
+      ],
+      "expected_processing_time_ms": 3000
+    },
+    "subscription_software_annotated_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "subscription",
+      "industry": "software",
+      "quality": "medium",
+      "orientation": "portrait",
+      "has_handwritten_notes": true,
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "SUB-2025-7890",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.93
+        },
+        "invoice_date": {
+          "value": "2025-05-01",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.92
+        },
+        "billing_period": {
+          "value": "2025-05-01 to 2025-05-31",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.91
+        },
+        "vendor_name": {
+          "value": "CloudSoft Solutions",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.95
+        },
+        "vendor_address": {
+          "value": "1 Software Plaza, Seattle, WA 98101",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.90
+        },
+        "vendor_email": {
+          "value": "billing@cloudsoft.com",
+          "position": [0.10, 0.11, 0.50, 0.14],
+          "expected_confidence": 0.91
+        },
+        "customer_name": {
+          "value": "Financial Analytics Corp",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.94
+        },
+        "customer_address": {
+          "value": "800 Wall Street, New York, NY 10005",
+          "position": [0.60, 0.25, 0.90, 0.28],
+          "expected_confidence": 0.89
+        },
+        "customer_id": {
+          "value": "FAC-12345",
+          "position": [0.60, 0.28, 0.80, 0.31],
+          "expected_confidence": 0.93
+        },
+        "subscription_plan": {
+          "value": "Enterprise Analytics Suite",
+          "position": [0.10, 0.31, 0.60, 0.34],
+          "expected_confidence": 0.92
+        },
+        "user_count": {
+          "value": "50 users",
+          "position": [0.60, 0.31, 0.80, 0.34],
+          "expected_confidence": 0.94
+        },
+        "subtotal": {
+          "value": "2500.00",
+          "position": [0.70, 0.60, 0.90, 0.63],
+          "expected_confidence": 0.95
+        },
+        "discount": {
+          "value": "-250.00",
+          "position": [0.70, 0.63, 0.90, 0.66],
+          "expected_confidence": 0.94
+        },
+        "tax": {
+          "value": "202.50",
+          "position": [0.70, 0.66, 0.90, 0.69],
+          "expected_confidence": 0.93
+        },
+        "total": {
+          "value": "2452.50",
+          "position": [0.70, 0.72, 0.90, 0.75],
+          "expected_confidence": 0.96
+        },
+        "payment_method": {
+          "value": "Auto-charge to card ending in 5678",
+          "position": [0.10, 0.80, 0.60, 0.83],
+          "expected_confidence": 0.90
+        },
+        "next_billing_date": {
+          "value": "2025-06-01",
+          "position": [0.10, 0.83, 0.40, 0.86],
+          "expected_confidence": 0.91
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "EAS-BASE",
+          "description": "Enterprise Analytics Suite - Base Subscription",
+          "quantity": "1",
+          "unit_price": "1000.00",
+          "amount": "1000.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.92
+        },
+        {
+          "item_number": "EAS-USER",
+          "description": "User Licenses (50 users)",
+          "quantity": "50",
+          "unit_price": "30.00",
+          "amount": "1500.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.91
+        }
+      ],
+      "handwritten_notes": [
+        {
+          "content": "Approved by Finance - J.Smith",
+          "position": [0.10, 0.90, 0.50, 0.95],
+          "expected_confidence": 0.75
+        },
+        {
+          "content": "Allocate to Dept 305",
+          "position": [0.60, 0.90, 0.90, 0.95],
+          "expected_confidence": 0.72
+        }
+      ],
+      "expected_processing_time_ms": 2500
+    },
+    "construction_commercial_watermarked_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "construction",
+      "industry": "commercial",
+      "quality": "medium",
+      "orientation": "portrait",
+      "has_watermark": true,
+      "page_count": 2,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "CONST-2025-4567",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.88
+        },
+        "invoice_date": {
+          "value": "2025-04-30",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.87
+        },
+        "due_date": {
+          "value": "2025-05-30",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.86
+        },
+        "vendor_name": {
+          "value": "Premier Construction Services",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.90
+        },
+        "vendor_address": {
+          "value": "1500 Builder Avenue, Dallas, TX 75201",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.85
+        },
+        "vendor_phone": {
+          "value": "(555) 345-6789",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.87
+        },
+        "vendor_license": {
+          "value": "TX-CONTR-98765",
+          "position": [0.10, 0.14, 0.40, 0.17],
+          "expected_confidence": 0.86
+        },
+        "customer_name": {
+          "value": "Metropolis Development Group",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.89
+        },
+        "customer_address": {
+          "value": "300 Skyline Drive, Dallas, TX 75202",
+          "position": [0.60, 0.25, 0.90, 0.28],
+          "expected_confidence": 0.84
+        },
+        "project_name": {
+          "value": "Downtown Office Tower - Phase 2",
+          "position": [0.10, 0.28, 0.60, 0.31],
+          "expected_confidence": 0.88
+        },
+        "project_number": {
+          "value": "PRJ-2025-112",
+          "position": [0.60, 0.28, 0.80, 0.31],
+          "expected_confidence": 0.87
+        },
+        "billing_period": {
+          "value": "2025-04-01 to 2025-04-30",
+          "position": [0.10, 0.31, 0.50, 0.34],
+          "expected_confidence": 0.85
+        },
+        "subtotal": {
+          "value": "128500.00",
+          "position": [0.70, 0.70, 0.90, 0.73],
+          "expected_confidence": 0.90
+        },
+        "tax": {
+          "value": "10280.00",
+          "position": [0.70, 0.73, 0.90, 0.76],
+          "expected_confidence": 0.89
+        },
+        "total": {
+          "value": "138780.00",
+          "position": [0.70, 0.79, 0.90, 0.82],
+          "expected_confidence": 0.91
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.85, 0.30, 0.88],
+          "expected_confidence": 0.84
+        },
+        "retention": {
+          "value": "10% (12850.00)",
+          "position": [0.10, 0.88, 0.40, 0.91],
+          "expected_confidence": 0.85
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "LABOR-001",
+          "description": "Skilled Labor - Construction Team",
+          "quantity": "320 hours",
+          "unit_price": "85.00",
+          "amount": "27200.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.87
+        },
+        {
+          "item_number": "MAT-100",
+          "description": "Structural Steel",
+          "quantity": "45 tons",
+          "unit_price": "1200.00",
+          "amount": "54000.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.86
+        },
+        {
+          "item_number": "MAT-200",
+          "description": "Concrete and Formwork",
+          "quantity": "1",
+          "unit_price": "18500.00",
+          "amount": "18500.00",
+          "position": [0.10, 0.48, 0.90, 0.52],
+          "expected_confidence": 0.85
+        },
+        {
+          "item_number": "EQUIP-001",
+          "description": "Heavy Equipment Rental",
+          "quantity": "1",
+          "unit_price": "12800.00",
+          "amount": "12800.00",
+          "position": [0.10, 0.52, 0.90, 0.56],
+          "expected_confidence": 0.84
+        },
+        {
+          "item_number": "SUBCON-001",
+          "description": "Electrical Subcontractor",
+          "quantity": "1",
+          "unit_price": "16000.00",
+          "amount": "16000.00",
+          "position": [0.10, 0.56, 0.90, 0.60],
+          "expected_confidence": 0.83
+        }
+      ],
+      "expected_processing_time_ms": 3200
+    },
+    "medical_healthcare_compressed_01.jpeg": {
+      "document_type": "invoice",
+      "invoice_type": "medical",
+      "industry": "healthcare",
+      "quality": "low",
+      "orientation": "portrait",
+      "compression_artifacts": true,
+      "page_count": 1,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "MED-2025-8901",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.83
+        },
+        "invoice_date": {
+          "value": "2025-05-02",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.82
+        },
+        "due_date": {
+          "value": "2025-06-01",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.81
+        },
+        "provider_name": {
+          "value": "Wellness Medical Center",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.86
+        },
+        "provider_address": {
+          "value": "500 Health Boulevard, Boston, MA 02108",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.80
+        },
+        "provider_phone": {
+          "value": "(555) 567-8901",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.82
+        },
+        "provider_npi": {
+          "value": "1234567890",
+          "position": [0.10, 0.14, 0.40, 0.17],
+          "expected_confidence": 0.83
+        },
+        "patient_name": {
+          "value": "John Q. Patient",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.85
+        },
+        "patient_id": {
+          "value": "PAT-567890",
+          "position": [0.60, 0.25, 0.80, 0.28],
+          "expected_confidence": 0.84
+        },
+        "insurance_provider": {
+          "value": "National Health Insurance",
+          "position": [0.60, 0.28, 0.90, 0.31],
+          "expected_confidence": 0.83
+        },
+        "insurance_id": {
+          "value": "INS-123456789",
+          "position": [0.60, 0.31, 0.90, 0.34],
+          "expected_confidence": 0.82
+        },
+        "service_date": {
+          "value": "2025-04-25",
+          "position": [0.10, 0.34, 0.30, 0.37],
+          "expected_confidence": 0.81
+        },
+        "subtotal": {
+          "value": "850.00",
+          "position": [0.70, 0.65, 0.90, 0.68],
+          "expected_confidence": 0.85
+        },
+        "insurance_adjustment": {
+          "value": "-425.00",
+          "position": [0.70, 0.68, 0.90, 0.71],
+          "expected_confidence": 0.84
+        },
+        "insurance_payment": {
+          "value": "-340.00",
+          "position": [0.70, 0.71, 0.90, 0.74],
+          "expected_confidence": 0.83
+        },
+        "patient_responsibility": {
+          "value": "85.00",
+          "position": [0.70, 0.77, 0.90, 0.80],
+          "expected_confidence": 0.86
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "CPT-99214",
+          "description": "Office Visit - Established Patient (Level 4)",
+          "quantity": "1",
+          "unit_price": "250.00",
+          "amount": "250.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.82
+        },
+        {
+          "item_number": "CPT-85027",
+          "description": "Complete Blood Count (CBC)",
+          "quantity": "1",
+          "unit_price": "75.00",
+          "amount": "75.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.81
+        },
+        {
+          "item_number": "CPT-80053",
+          "description": "Comprehensive Metabolic Panel",
+          "quantity": "1",
+          "unit_price": "120.00",
+          "amount": "120.00",
+          "position": [0.10, 0.48, 0.90, 0.52],
+          "expected_confidence": 0.80
+        },
+        {
+          "item_number": "CPT-73630",
+          "description": "X-Ray Examination - Foot (3 views)",
+          "quantity": "1",
+          "unit_price": "225.00",
+          "amount": "225.00",
+          "position": [0.10, 0.52, 0.90, 0.56],
+          "expected_confidence": 0.79
+        },
+        {
+          "item_number": "CPT-29540",
+          "description": "Strapping of Ankle and/or Foot",
+          "quantity": "1",
+          "unit_price": "180.00",
+          "amount": "180.00",
+          "position": [0.10, 0.56, 0.90, 0.60],
+          "expected_confidence": 0.78
+        }
+      ],
+      "expected_processing_time_ms": 2700
+    },
+    "shipping_logistics_multipage_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "shipping",
+      "industry": "logistics",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "language": "en-US",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "SHIP-2025-5678",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.97
+        },
+        "invoice_date": {
+          "value": "2025-05-03",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.96
+        },
+        "due_date": {
+          "value": "2025-06-02",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.95
+        },
+        "carrier_name": {
+          "value": "Global Logistics Solutions",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.98
+        },
+        "carrier_address": {
+          "value": "2500 Shipping Lane, Memphis, TN 38101",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.94
+        },
+        "carrier_phone": {
+          "value": "(555) 678-9012",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.95
+        },
+        "shipper_name": {
+          "value": "Electronics Wholesale Distributors",
+          "position": [0.10, 0.20, 0.60, 0.23],
+          "expected_confidence": 0.97
+        },
+        "shipper_address": {
+          "value": "1000 Supplier Road, San Jose, CA 95131",
+          "position": [0.10, 0.23, 0.60, 0.26],
+          "expected_confidence": 0.93
+        },
+        "consignee_name": {
+          "value": "Retail Electronics Megastore",
+          "position": [0.60, 0.20, 0.90, 0.23],
+          "expected_confidence": 0.96
+        },
+        "consignee_address": {
+          "value": "750 Commerce Way, Atlanta, GA 30303",
+          "position": [0.60, 0.23, 0.90, 0.26],
+          "expected_confidence": 0.92
+        },
+        "tracking_number": {
+          "value": "GLS-987654321",
+          "position": [0.60, 0.26, 0.90, 0.29],
+          "expected_confidence": 0.95
+        },
+        "shipment_date": {
+          "value": "2025-04-28",
+          "position": [0.10, 0.29, 0.30, 0.32],
+          "expected_confidence": 0.94
+        },
+        "delivery_date": {
+          "value": "2025-05-02",
+          "position": [0.30, 0.29, 0.50, 0.32],
+          "expected_confidence": 0.93
+        },
+        "service_level": {
+          "value": "Express 2-Day",
+          "position": [0.50, 0.29, 0.70, 0.32],
+          "expected_confidence": 0.95
+        },
+        "freight_charges": {
+          "value": "3250.00",
+          "position": [0.70, 0.65, 0.90, 0.68],
+          "expected_confidence": 0.97
+        },
+        "fuel_surcharge": {
+          "value": "487.50",
+          "position": [0.70, 0.68, 0.90, 0.71],
+          "expected_confidence": 0.96
+        },
+        "insurance": {
+          "value": "175.00",
+          "position": [0.70, 0.71, 0.90, 0.74],
+          "expected_confidence": 0.95
+        },
+        "customs_fees": {
+          "value": "0.00",
+          "position": [0.70, 0.74, 0.90, 0.77],
+          "expected_confidence": 0.98
+        },
+        "total": {
+          "value": "3912.50",
+          "position": [0.70, 0.80, 0.90, 0.83],
+          "expected_confidence": 0.98
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.85, 0.30, 0.88],
+          "expected_confidence": 0.94
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "PKG-001",
+          "description": "Pallet - Electronics (TVs)",
+          "quantity": "2",
+          "weight": "850 kg",
+          "dimensions": "120x100x160 cm",
+          "freight_class": "92.5",
+          "amount": "1800.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.96
+        },
+        {
+          "item_number": "PKG-002",
+          "description": "Pallet - Electronics (Audio Equipment)",
+          "quantity": "1",
+          "weight": "425 kg",
+          "dimensions": "120x100x140 cm",
+          "freight_class": "85",
+          "amount": "950.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.95
+        },
+        {
+          "item_number": "PKG-003",
+          "description": "Boxes - Electronics (Accessories)",
+          "quantity": "5",
+          "weight": "175 kg",
+          "dimensions": "60x40x50 cm",
+          "freight_class": "70",
+          "amount": "500.00",
+          "position": [0.10, 0.48, 0.90, 0.52],
+          "expected_confidence": 0.94
+        }
+      ],
+      "expected_processing_time_ms": 3500
+    },
+    "international_manufacturing_smallfont_01.pdf": {
+      "document_type": "invoice",
+      "invoice_type": "international",
+      "industry": "manufacturing",
+      "quality": "medium",
+      "orientation": "portrait",
+      "font_size": "small",
+      "page_count": 2,
+      "language": "en-US",
+      "secondary_language": "de-DE",
+      "has_tables": true,
+      "has_logo": true,
+      "expected_fields": {
+        "invoice_number": {
+          "value": "INT-2025-9012",
+          "position": [0.70, 0.10, 0.90, 0.13],
+          "expected_confidence": 0.89
+        },
+        "invoice_date": {
+          "value": "2025-05-04",
+          "position": [0.70, 0.13, 0.90, 0.16],
+          "expected_confidence": 0.88
+        },
+        "due_date": {
+          "value": "2025-06-03",
+          "position": [0.70, 0.16, 0.90, 0.19],
+          "expected_confidence": 0.87
+        },
+        "vendor_name": {
+          "value": "Precision Engineering GmbH",
+          "position": [0.10, 0.05, 0.60, 0.08],
+          "expected_confidence": 0.91
+        },
+        "vendor_address": {
+          "value": "Industriestraße 45, 70565 Stuttgart, Germany",
+          "position": [0.10, 0.08, 0.60, 0.11],
+          "expected_confidence": 0.86
+        },
+        "vendor_phone": {
+          "value": "+49 711 123 4567",
+          "position": [0.10, 0.11, 0.40, 0.14],
+          "expected_confidence": 0.88
+        },
+        "vendor_vat": {
+          "value": "DE123456789",
+          "position": [0.10, 0.14, 0.40, 0.17],
+          "expected_confidence": 0.89
+        },
+        "customer_name": {
+          "value": "American Automotive Manufacturers Inc.",
+          "position": [0.60, 0.22, 0.90, 0.25],
+          "expected_confidence": 0.90
+        },
+        "customer_address": {
+          "value": "2000 Motor City Drive, Detroit, MI 48207, USA",
+          "position": [0.60, 0.25, 0.90, 0.28],
+          "expected_confidence": 0.85
+        },
+        "customer_tax_id": {
+          "value": "US-EIN-12-3456789",
+          "position": [0.60, 0.28, 0.90, 0.31],
+          "expected_confidence": 0.87
+        },
+        "purchase_order": {
+          "value": "PO-AAM-78901",
+          "position": [0.10, 0.31, 0.40, 0.34],
+          "expected_confidence": 0.88
+        },
+        "incoterms": {
+          "value": "CIF Detroit",
+          "position": [0.40, 0.31, 0.60, 0.34],
+          "expected_confidence": 0.86
+        },
+        "subtotal": {
+          "value": "45000.00",
+          "position": [0.70, 0.65, 0.90, 0.68],
+          "expected_confidence": 0.90
+        },
+        "vat": {
+          "value": "0.00",
+          "position": [0.70, 0.68, 0.90, 0.71],
+          "expected_confidence": 0.92
+        },
+        "shipping": {
+          "value": "3500.00",
+          "position": [0.70, 0.71, 0.90, 0.74],
+          "expected_confidence": 0.89
+        },
+        "insurance": {
+          "value": "750.00",
+          "position": [0.70, 0.74, 0.90, 0.77],
+          "expected_confidence": 0.88
+        },
+        "total": {
+          "value": "49250.00",
+          "position": [0.70, 0.80, 0.90, 0.83],
+          "expected_confidence": 0.91
+        },
+        "currency": {
+          "value": "EUR",
+          "position": [0.65, 0.80, 0.70, 0.83],
+          "expected_confidence": 0.92
+        },
+        "exchange_rate": {
+          "value": "1 EUR = 1.08 USD",
+          "position": [0.10, 0.83, 0.40, 0.86],
+          "expected_confidence": 0.87
+        },
+        "payment_terms": {
+          "value": "Net 30",
+          "position": [0.10, 0.86, 0.30, 0.89],
+          "expected_confidence": 0.85
+        },
+        "bank_details": {
+          "value": "Deutsche Bank, IBAN: DE89 3704 0044 0532 0130 00, BIC: DEUTDEDBXXX",
+          "position": [0.10, 0.89, 0.90, 0.92],
+          "expected_confidence": 0.84
+        }
+      },
+      "line_items": [
+        {
+          "item_number": "PE-5001",
+          "description": "Precision Machined Transmission Components",
+          "quantity": "500",
+          "unit_price": "45.00",
+          "amount": "22500.00",
+          "position": [0.10, 0.40, 0.90, 0.44],
+          "expected_confidence": 0.88
+        },
+        {
+          "item_number": "PE-5002",
+          "description": "High-Performance Engine Valves",
+          "quantity": "1000",
+          "unit_price": "22.50",
+          "amount": "22500.00",
+          "position": [0.10, 0.44, 0.90, 0.48],
+          "expected_confidence": 0.87
+        }
+      ],
+      "expected_processing_time_ms": 3000
+    }
+  }
+}

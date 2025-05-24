@@ -1,0 +1,45 @@
+{
+  "name": "email-service",
+  "version": "1.0.0",
+  "description": "Email Service for Merchant Cash Advance (MCA) Application Processing System",
+  "main": "dist/index.js",
+  "engines": {
+    "node": "18.x"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "lint": "eslint . --ext .ts",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "nodemailer": "6.9.8",
+    "imap-simple": "6.0.0",
+    "amqplib": "0.10.3",
+    "ioredis": "5.3.2",
+    "@aws-sdk/client-s3": "3.509.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "winston": "^3.11.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.2",
+    "eslint": "9.23.0",
+    "@types/node": "^18.19.3",
+    "@types/nodemailer": "^6.4.14",
+    "@types/amqplib": "^0.10.4",
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "ts-node-dev": "^2.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "@types/jest": "^29.5.11"
+  },
+  "author": "Dollar Funding",
+  "license": "UNLICENSED",
+  "private": true
+}

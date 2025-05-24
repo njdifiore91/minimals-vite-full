@@ -1,0 +1,1268 @@
+[
+  {
+    "id": "DOC-2023-001",
+    "application_id": "APP-2023-001",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-001/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-15T09:20:12.000Z",
+    "metadata": {
+      "bank_name": "First National Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "7890",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 5,
+      "file_size_kb": 1245,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-002",
+    "application_id": "APP-2023-001",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-001/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "bank_statement", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-15T09:21:33.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1120",
+      "business_name": "Riverside Retail Solutions, Inc.",
+      "ein_last4": "1987",
+      "page_count": 22,
+      "file_size_kb": 3456,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-003",
+    "application_id": "APP-2023-001",
+    "type": "business_license",
+    "storage_path": "s3://mca-documents-production/APP-2023-001/business_licenses/oregon_business_license.pdf",
+    "classification": {
+      "document_type": "business_license",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "identity_document", "confidence": 0.02},
+        {"type": "other", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-15T09:22:05.000Z",
+    "metadata": {
+      "license_type": "Business Operation License",
+      "issuing_authority": "State of Oregon",
+      "license_number": "OR-BUS-78945612",
+      "issue_date": "2021-03-15",
+      "expiration_date": "2024-03-14",
+      "page_count": 2,
+      "file_size_kb": 567,
+      "ocr_quality_score": 0.98,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-004",
+    "application_id": "APP-2023-002",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-002/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-15T10:12:45.000Z",
+    "metadata": {
+      "bank_name": "Michigan Credit Union",
+      "account_type": "Business Checking",
+      "account_number_last4": "3456",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 4,
+      "file_size_kb": 987,
+      "ocr_quality_score": 0.92,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-005",
+    "application_id": "APP-2023-002",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-production/APP-2023-002/identity_documents/drivers_license.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.01},
+        {"type": "business_license", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-15T10:13:22.000Z",
+    "metadata": {
+      "id_type": "Driver's License",
+      "issuing_state": "Michigan",
+      "id_number_last4": "8765",
+      "expiration_date": "2025-06-30",
+      "page_count": 1,
+      "file_size_kb": 245,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-006",
+    "application_id": "APP-2023-003",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/APP-2023-003/application/mca_application_form.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "other", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-15T11:05:33.000Z",
+    "metadata": {
+      "form_version": "MCA-2023-V2",
+      "completion_status": "complete",
+      "signature_present": true,
+      "requested_amount": 50000.00,
+      "page_count": 6,
+      "file_size_kb": 1876,
+      "ocr_quality_score": 0.99,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-007",
+    "application_id": "APP-2023-004",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-004/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.04},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-15T13:42:18.000Z",
+    "metadata": {
+      "bank_name": "Texas Commercial Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "5432",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 8,
+      "file_size_kb": 2345,
+      "ocr_quality_score": 0.93,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-008",
+    "application_id": "APP-2023-004",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-004/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-15T13:43:05.000Z",
+    "metadata": {
+      "bank_name": "Texas Commercial Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "5432",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 7,
+      "file_size_kb": 2156,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-009",
+    "application_id": "APP-2023-004",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-004/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "bank_statement", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-15T13:44:22.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1120",
+      "business_name": "Cornerstone Construction & Development, Inc.",
+      "ein_last4": "6782",
+      "page_count": 30,
+      "file_size_kb": 5678,
+      "ocr_quality_score": 0.91,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-010",
+    "application_id": "APP-2023-005",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-005/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-16T09:10:15.000Z",
+    "metadata": {
+      "bank_name": "Pacific Northwest Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "9876",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 4,
+      "file_size_kb": 1123,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-011",
+    "application_id": "APP-2023-005",
+    "type": "profit_loss_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-005/financial_statements/profit_loss_q3_2023.pdf",
+    "classification": {
+      "document_type": "profit_loss_statement",
+      "confidence": 0.94,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.05},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-16T09:11:02.000Z",
+    "metadata": {
+      "statement_type": "Profit & Loss",
+      "period": "Q3 2023",
+      "prepared_by": "Internal Accounting",
+      "total_revenue": 84000.00,
+      "net_profit": 12600.00,
+      "page_count": 3,
+      "file_size_kb": 876,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-012",
+    "application_id": "APP-2023-006",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-006/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.92,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.07},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-16T10:30:45.000Z",
+    "metadata": {
+      "bank_name": "Midwest Financial",
+      "account_type": "Business Checking",
+      "account_number_last4": "1234",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 6,
+      "file_size_kb": 1567,
+      "ocr_quality_score": 0.89,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-013",
+    "application_id": "APP-2023-006",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-006/bank_statements/statement_aug2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.74,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.15},
+        {"type": "tax_document", "confidence": 0.11}
+      ]
+    },
+    "uploaded_at": "2023-11-16T10:31:22.000Z",
+    "metadata": {
+      "bank_name": "Midwest Financial",
+      "account_type": "Business Checking",
+      "account_number_last4": "1234",
+      "statement_period": "08/01/2023 - 08/31/2023",
+      "page_count": 6,
+      "file_size_kb": 1498,
+      "ocr_quality_score": 0.72,
+      "encryption": "AES-256",
+      "quality_issues": ["poor_scan_quality", "handwritten_annotations"]
+    }
+  },
+  {
+    "id": "DOC-2023-014",
+    "application_id": "APP-2023-006",
+    "type": "medical_license",
+    "storage_path": "s3://mca-documents-production/APP-2023-006/business_licenses/illinois_medical_license.pdf",
+    "classification": {
+      "document_type": "medical_license",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "business_license", "confidence": 0.03},
+        {"type": "identity_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-16T10:32:15.000Z",
+    "metadata": {
+      "license_type": "Medical Practice License",
+      "issuing_authority": "Illinois Department of Professional Regulation",
+      "license_number": "IL-MED-123456",
+      "issue_date": "2022-01-15",
+      "expiration_date": "2024-01-14",
+      "page_count": 1,
+      "file_size_kb": 432,
+      "ocr_quality_score": 0.98,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-015",
+    "application_id": "APP-2023-007",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-007/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-16T14:20:05.000Z",
+    "metadata": {
+      "bank_name": "Southern United Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "6543",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 5,
+      "file_size_kb": 1345,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-016",
+    "application_id": "APP-2023-007",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-007/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "bank_statement", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-16T14:21:12.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1065",
+      "business_name": "Global Distribution Partners, LLC",
+      "ein_last4": "8365",
+      "page_count": 18,
+      "file_size_kb": 3245,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-017",
+    "application_id": "APP-2023-008",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-008/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T09:02:33.000Z",
+    "metadata": {
+      "bank_name": "Louisiana Community Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "8765",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 4,
+      "file_size_kb": 987,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-018",
+    "application_id": "APP-2023-008",
+    "type": "business_license",
+    "storage_path": "s3://mca-documents-production/APP-2023-008/business_licenses/louisiana_food_service_license.pdf",
+    "classification": {
+      "document_type": "business_license",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.03},
+        {"type": "identity_document", "confidence": 0.02}
+      ]
+    },
+    "uploaded_at": "2023-11-17T09:03:15.000Z",
+    "metadata": {
+      "license_type": "Food Service Establishment License",
+      "issuing_authority": "Louisiana Department of Health",
+      "license_number": "LA-FSE-987654",
+      "issue_date": "2023-01-10",
+      "expiration_date": "2024-01-09",
+      "page_count": 2,
+      "file_size_kb": 543,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-019",
+    "application_id": "APP-2023-008",
+    "type": "lease_agreement",
+    "storage_path": "s3://mca-documents-production/APP-2023-008/contracts/commercial_lease.pdf",
+    "classification": {
+      "document_type": "lease_agreement",
+      "confidence": 0.93,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.04},
+        {"type": "financial_document", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-17T09:04:22.000Z",
+    "metadata": {
+      "document_type": "Commercial Lease Agreement",
+      "property_address": "350 Culinary Ave, New Orleans, LA 70112",
+      "lease_term": "5 years",
+      "monthly_rent": 4500.00,
+      "start_date": "2022-03-01",
+      "end_date": "2027-02-28",
+      "page_count": 12,
+      "file_size_kb": 2876,
+      "ocr_quality_score": 0.92,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-020",
+    "application_id": "APP-2023-009",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-009/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T11:30:45.000Z",
+    "metadata": {
+      "bank_name": "California Tech Credit Union",
+      "account_type": "Business Checking",
+      "account_number_last4": "4321",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 6,
+      "file_size_kb": 1654,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-021",
+    "application_id": "APP-2023-009",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-009/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T11:31:22.000Z",
+    "metadata": {
+      "bank_name": "California Tech Credit Union",
+      "account_type": "Business Checking",
+      "account_number_last4": "4321",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 5,
+      "file_size_kb": 1543,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-022",
+    "application_id": "APP-2023-009",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-009/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "bank_statement", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T11:32:15.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1120",
+      "business_name": "Innovative Tech Solutions, Inc.",
+      "ein_last4": "9184",
+      "page_count": 25,
+      "file_size_kb": 4321,
+      "ocr_quality_score": 0.93,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-023",
+    "application_id": "APP-2023-010",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-010/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T13:42:33.000Z",
+    "metadata": {
+      "bank_name": "Rocky Mountain Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "5678",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 4,
+      "file_size_kb": 1234,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-024",
+    "application_id": "APP-2023-010",
+    "type": "profit_loss_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-010/financial_statements/profit_loss_ytd_2023.pdf",
+    "classification": {
+      "document_type": "profit_loss_statement",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.04},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T13:43:15.000Z",
+    "metadata": {
+      "statement_type": "Profit & Loss",
+      "period": "YTD 2023 (Jan-Oct)",
+      "prepared_by": "Denver Accounting Services",
+      "total_revenue": 350000.00,
+      "net_profit": 52500.00,
+      "page_count": 4,
+      "file_size_kb": 987,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-025",
+    "application_id": "APP-2023-010",
+    "type": "business_license",
+    "storage_path": "s3://mca-documents-production/APP-2023-010/business_licenses/colorado_business_license.pdf",
+    "classification": {
+      "document_type": "business_license",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "identity_document", "confidence": 0.02},
+        {"type": "other", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-17T13:44:05.000Z",
+    "metadata": {
+      "license_type": "Business Operation License",
+      "issuing_authority": "State of Colorado",
+      "license_number": "CO-BUS-456789",
+      "issue_date": "2022-05-20",
+      "expiration_date": "2024-05-19",
+      "page_count": 1,
+      "file_size_kb": 432,
+      "ocr_quality_score": 0.98,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-026",
+    "application_id": "APP-2023-011",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/APP-2023-011/application/mca_application_form.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "other", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-18T09:15:22.000Z",
+    "metadata": {
+      "form_version": "MCA-2023-V2",
+      "completion_status": "complete",
+      "signature_present": true,
+      "requested_amount": 60000.00,
+      "page_count": 6,
+      "file_size_kb": 1765,
+      "ocr_quality_score": 0.99,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-027",
+    "application_id": "APP-2023-012",
+    "type": "franchise_agreement",
+    "storage_path": "s3://mca-documents-production/APP-2023-012/contracts/franchise_agreement.pdf",
+    "classification": {
+      "document_type": "franchise_agreement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.03},
+        {"type": "financial_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-18T10:42:15.000Z",
+    "metadata": {
+      "franchisor": "Quick Bites International",
+      "agreement_type": "Standard Franchise Agreement",
+      "territory": "Phoenix Metro Area",
+      "franchise_fee": 45000.00,
+      "royalty_percentage": 6.5,
+      "term_years": 10,
+      "page_count": 35,
+      "file_size_kb": 8765,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-028",
+    "application_id": "APP-2023-012",
+    "type": "business_plan",
+    "storage_path": "s3://mca-documents-production/APP-2023-012/business_plans/quick_bites_phoenix_plan.pdf",
+    "classification": {
+      "document_type": "business_plan",
+      "confidence": 0.92,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.05},
+        {"type": "financial_document", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-18T10:43:22.000Z",
+    "metadata": {
+      "business_name": "Quick Bites Franchise, Inc.",
+      "plan_type": "New Location Business Plan",
+      "projected_opening_date": "2024-03-15",
+      "projected_first_year_revenue": 750000.00,
+      "page_count": 22,
+      "file_size_kb": 4321,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-029",
+    "application_id": "APP-2023-012",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-production/APP-2023-012/identity_documents/passport.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.01},
+        {"type": "business_license", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-18T10:44:05.000Z",
+    "metadata": {
+      "id_type": "Passport",
+      "issuing_country": "United States",
+      "id_number_last4": "3456",
+      "expiration_date": "2028-07-15",
+      "page_count": 1,
+      "file_size_kb": 345,
+      "ocr_quality_score": 0.98,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-030",
+    "application_id": "APP-2023-013",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-013/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-18T13:20:33.000Z",
+    "metadata": {
+      "bank_name": "Tennessee Valley Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "9876",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 5,
+      "file_size_kb": 1432,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-031",
+    "application_id": "APP-2023-013",
+    "type": "equipment_invoice",
+    "storage_path": "s3://mca-documents-production/APP-2023-013/invoices/equipment_invoice.pdf",
+    "classification": {
+      "document_type": "equipment_invoice",
+      "confidence": 0.94,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.05},
+        {"type": "other", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-18T13:21:15.000Z",
+    "metadata": {
+      "invoice_number": "INV-2023-4567",
+      "vendor": "Heavy Equipment Suppliers, Inc.",
+      "invoice_date": "2023-11-10",
+      "total_amount": 52750.00,
+      "payment_terms": "Net 30",
+      "page_count": 2,
+      "file_size_kb": 654,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-032",
+    "application_id": "APP-2023-014",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-014/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-19T09:30:45.000Z",
+    "metadata": {
+      "bank_name": "Pennsylvania Commerce Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "5432",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 4,
+      "file_size_kb": 1123,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-033",
+    "application_id": "APP-2023-014",
+    "type": "credit_report",
+    "storage_path": "s3://mca-documents-production/APP-2023-014/credit/business_credit_report.pdf",
+    "classification": {
+      "document_type": "credit_report",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "other", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-19T09:31:22.000Z",
+    "metadata": {
+      "report_type": "Business Credit Report",
+      "credit_bureau": "Experian Business",
+      "report_date": "2023-11-15",
+      "business_name": "Urban Retail Collective, Inc.",
+      "credit_score": 72,
+      "page_count": 8,
+      "file_size_kb": 1876,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-034",
+    "application_id": "APP-2023-015",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-015/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-19T11:12:33.000Z",
+    "metadata": {
+      "bank_name": "Ohio Manufacturing Credit Union",
+      "account_type": "Business Checking",
+      "account_number_last4": "7654",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 7,
+      "file_size_kb": 1876,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-035",
+    "application_id": "APP-2023-015",
+    "type": "acquisition_agreement",
+    "storage_path": "s3://mca-documents-production/APP-2023-015/contracts/business_acquisition.pdf",
+    "classification": {
+      "document_type": "acquisition_agreement",
+      "confidence": 0.93,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.04},
+        {"type": "financial_document", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-19T11:13:45.000Z",
+    "metadata": {
+      "agreement_type": "Business Acquisition Agreement",
+      "seller": "Midwest Manufacturing, LLC",
+      "buyer": "Advanced Manufacturing Systems, Inc.",
+      "purchase_price": 175000.00,
+      "closing_date": "2023-12-15",
+      "page_count": 28,
+      "file_size_kb": 5432,
+      "ocr_quality_score": 0.93,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-036",
+    "application_id": "APP-2023-016",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-016/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-19T14:02:33.000Z",
+    "metadata": {
+      "bank_name": "Massachusetts Digital Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "3210",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 4,
+      "file_size_kb": 1234,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-037",
+    "application_id": "APP-2023-016",
+    "type": "marketing_proposal",
+    "storage_path": "s3://mca-documents-production/APP-2023-016/business_plans/marketing_campaign_proposal.pdf",
+    "classification": {
+      "document_type": "marketing_proposal",
+      "confidence": 0.91,
+      "alternative_classifications": [
+        {"type": "business_plan", "confidence": 0.06},
+        {"type": "other", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-19T14:03:15.000Z",
+    "metadata": {
+      "proposal_title": "Q1 2024 Digital Marketing Campaign",
+      "prepared_by": "Boston Marketing Group",
+      "prepared_for": "Digital Marketing Specialists, LLC",
+      "total_budget": 38500.00,
+      "campaign_duration": "3 months",
+      "page_count": 15,
+      "file_size_kb": 3456,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-038",
+    "application_id": "APP-2023-017",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/APP-2023-017/application/mca_application_form.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "other", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-20T09:22:33.000Z",
+    "metadata": {
+      "form_version": "MCA-2023-V2",
+      "completion_status": "complete",
+      "signature_present": true,
+      "requested_amount": 70000.00,
+      "page_count": 6,
+      "file_size_kb": 1765,
+      "ocr_quality_score": 0.99,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-039",
+    "application_id": "APP-2023-018",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-018/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-20T10:42:33.000Z",
+    "metadata": {
+      "bank_name": "Nevada Investment Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "8765",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 6,
+      "file_size_kb": 1654,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-040",
+    "application_id": "APP-2023-018",
+    "type": "property_appraisal",
+    "storage_path": "s3://mca-documents-production/APP-2023-018/real_estate/commercial_property_appraisal.pdf",
+    "classification": {
+      "document_type": "property_appraisal",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "other", "confidence": 0.02}
+      ]
+    },
+    "uploaded_at": "2023-11-20T10:43:15.000Z",
+    "metadata": {
+      "property_type": "Commercial Office Building",
+      "property_address": "1800 Real Estate Row, Las Vegas, NV 89101",
+      "appraised_value": 950000.00,
+      "appraisal_date": "2023-11-05",
+      "appraiser": "Nevada Commercial Appraisers, LLC",
+      "page_count": 32,
+      "file_size_kb": 7654,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-041",
+    "application_id": "APP-2023-018",
+    "type": "purchase_agreement",
+    "storage_path": "s3://mca-documents-production/APP-2023-018/real_estate/property_purchase_agreement.pdf",
+    "classification": {
+      "document_type": "purchase_agreement",
+      "confidence": 0.94,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.04},
+        {"type": "financial_document", "confidence": 0.02}
+      ]
+    },
+    "uploaded_at": "2023-11-20T10:44:22.000Z",
+    "metadata": {
+      "agreement_type": "Commercial Real Estate Purchase Agreement",
+      "seller": "Desert Properties, LLC",
+      "buyer": "Prime Property Investments, LLC",
+      "purchase_price": 925000.00,
+      "closing_date": "2024-01-15",
+      "page_count": 24,
+      "file_size_kb": 5432,
+      "ocr_quality_score": 0.93,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-042",
+    "application_id": "APP-2023-019",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-019/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-20T13:12:45.000Z",
+    "metadata": {
+      "bank_name": "Texas Business Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "4321",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 5,
+      "file_size_kb": 1345,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-043",
+    "application_id": "APP-2023-019",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-019/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "bank_statement", "confidence": 0.00}
+      ]
+    },
+    "uploaded_at": "2023-11-20T13:13:22.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1120",
+      "business_name": "Quality Wholesale Distributors, Inc.",
+      "ein_last4": "1825",
+      "page_count": 20,
+      "file_size_kb": 3876,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-044",
+    "application_id": "APP-2023-019",
+    "type": "inventory_list",
+    "storage_path": "s3://mca-documents-production/APP-2023-019/inventory/current_inventory_report.xlsx",
+    "classification": {
+      "document_type": "inventory_list",
+      "confidence": 0.92,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.05},
+        {"type": "other", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-20T13:14:15.000Z",
+    "metadata": {
+      "document_type": "Inventory Report",
+      "report_date": "2023-11-15",
+      "total_sku_count": 1245,
+      "total_inventory_value": 425000.00,
+      "file_size_kb": 876,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-045",
+    "application_id": "APP-2023-020",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-020/bank_statements/statement_sep2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.03},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-21T09:30:45.000Z",
+    "metadata": {
+      "bank_name": "Indiana Commerce Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "6789",
+      "statement_period": "09/01/2023 - 09/30/2023",
+      "page_count": 4,
+      "file_size_kb": 1123,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-046",
+    "application_id": "APP-2023-020",
+    "type": "equipment_invoice",
+    "storage_path": "s3://mca-documents-production/APP-2023-020/invoices/truck_purchase_invoice.pdf",
+    "classification": {
+      "document_type": "equipment_invoice",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.04},
+        {"type": "other", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-21T09:31:22.000Z",
+    "metadata": {
+      "invoice_number": "INV-2023-7890",
+      "vendor": "Midwest Truck Sales, Inc.",
+      "invoice_date": "2023-11-12",
+      "total_amount": 87500.00,
+      "payment_terms": "Net 45",
+      "page_count": 3,
+      "file_size_kb": 876,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-047",
+    "application_id": "APP-2023-021",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-021/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.02},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-21T11:12:33.000Z",
+    "metadata": {
+      "bank_name": "Carolina Tech Credit Union",
+      "account_type": "Business Checking",
+      "account_number_last4": "5432",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 6,
+      "file_size_kb": 1654,
+      "ocr_quality_score": 0.96,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-048",
+    "application_id": "APP-2023-021",
+    "type": "business_plan",
+    "storage_path": "s3://mca-documents-production/APP-2023-021/business_plans/expansion_plan_2024.pdf",
+    "classification": {
+      "document_type": "business_plan",
+      "confidence": 0.93,
+      "alternative_classifications": [
+        {"type": "other", "confidence": 0.04},
+        {"type": "financial_document", "confidence": 0.03}
+      ]
+    },
+    "uploaded_at": "2023-11-21T11:13:15.000Z",
+    "metadata": {
+      "business_name": "Next-Gen Technology Solutions, Inc.",
+      "plan_type": "Business Expansion Plan",
+      "plan_period": "2024-2025",
+      "projected_growth": 35.0,
+      "page_count": 24,
+      "file_size_kb": 4567,
+      "ocr_quality_score": 0.94,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-049",
+    "application_id": "APP-2023-021",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/APP-2023-021/tax_returns/2022_business_tax_return.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "bank_statement", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-21T11:14:22.000Z",
+    "metadata": {
+      "tax_year": "2022",
+      "form_type": "1120",
+      "business_name": "Next-Gen Technology Solutions, Inc.",
+      "ein_last4": "9374",
+      "page_count": 22,
+      "file_size_kb": 4321,
+      "ocr_quality_score": 0.95,
+      "encryption": "AES-256"
+    }
+  },
+  {
+    "id": "DOC-2023-050",
+    "application_id": "APP-2023-022",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/APP-2023-022/bank_statements/statement_oct2023.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        {"type": "financial_document", "confidence": 0.01},
+        {"type": "tax_document", "confidence": 0.01}
+      ]
+    },
+    "uploaded_at": "2023-11-21T14:02:33.000Z",
+    "metadata": {
+      "bank_name": "North Carolina Business Bank",
+      "account_type": "Business Checking",
+      "account_number_last4": "7890",
+      "statement_period": "10/01/2023 - 10/31/2023",
+      "page_count": 4,
+      "file_size_kb": 1234,
+      "ocr_quality_score": 0.97,
+      "encryption": "AES-256"
+    }
+  }
+]

@@ -1,0 +1,290 @@
+{{- /*
+deployment.yaml: Kubernetes Deployment template for the Data Service
+
+This template defines how the Java Spring Boot Data Service should be deployed and run in the Kubernetes cluster.
+It includes container specifications, resource limits and requests, health probes, security context,
+environment variables, and volume mounts. The Data Service connects to PostgreSQL, Redis, and RabbitMQ,
+and requires appropriate JVM options for a production Java application.
+
+Key features:
+- Java Spring Boot application deployment with appropriate JVM settings
+- Connection to PostgreSQL 14 database with read replicas
+- Integration with Redis 7.0 for caching with specified TTL settings
+- Communication with other services via RabbitMQ
+- Container security with non-root users and read-only filesystem
+- Health monitoring with liveness and readiness probes
+- Resource limits and requests appropriate for a Java application
+*/}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: data-service
+  {{- with .Values.deployment.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount | default 2 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "common.labels.matchLabels" . | nindent 6 }}
+      app.kubernetes.io/component: data-service
+  strategy:
+    {{- if .Values.deployment.strategy }}
+    {{- toYaml .Values.deployment.strategy | nindent 4 }}
+    {{- else }}
+    # Use RollingUpdate strategy for zero-downtime deployments
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.podAnnotations }}
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- end }}
+        # Add checksum annotations for ConfigMap and Secret to trigger pod restart when they change
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "common.labels.matchLabels" . | nindent 8 }}
+        app.kubernetes.io/component: data-service
+        {{- if .Values.podLabels }}
+        {{- toYaml .Values.podLabels | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "common.names.serviceAccountName" . }}
+      securityContext:
+        {{- if .Values.podSecurityContext }}
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- else }}
+        # Default pod security context for enhanced security
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- end }}
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- toYaml .Values.initContainers | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- if .Values.securityContext }}
+            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- else }}
+            # Default container security context for enhanced security
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort | default 8080 }}
+              protocol: TCP
+            - name: management
+              containerPort: {{ .Values.service.managementPort | default 8081 }}
+              protocol: TCP
+            - name: jmx
+              containerPort: {{ .Values.service.jmxPort | default 9010 }}
+              protocol: TCP
+          # Liveness probe for Java Spring Boot application using Actuator health endpoint
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.path | default "/actuator/health/liveness" }}
+              port: management
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 60 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+          # Readiness probe for Java Spring Boot application using Actuator health endpoint
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path | default "/actuator/health/readiness" }}
+              port: management
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+          # Resource limits and requests appropriate for a Java application
+          resources:
+            {{- if .Values.resources }}
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- else }}
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            {{- end }}
+          # Environment variables for service configuration
+          env:
+            # Kubernetes metadata for service discovery
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: SERVICE_NAME
+              value: {{ include "common.names.fullname" . }}
+            # Java-specific environment variables
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.env.SPRING_PROFILES_ACTIVE | default "production" | quote }}
+            - name: JAVA_OPTS
+              value: {{ .Values.env.JAVA_OPTS | default "-Xms256m -Xmx512m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp -Djava.security.egd=file:/dev/./urandom" | quote }}
+            # Database connection environment variables
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://{{ .Values.postgresql.host | default (printf "%s-postgresql" .Release.Name) }}:{{ .Values.postgresql.port | default "5432" }}/{{ .Values.postgresql.database | default "mca" }}{{ .Values.postgresql.params | default "?reWriteBatchedInserts=true" }}"
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
+                  key: {{ .Values.postgresql.usernameKey | default "postgres-username" }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
+                  key: {{ .Values.postgresql.passwordKey | default "postgres-password" }}
+            # Redis connection environment variables
+            - name: SPRING_REDIS_HOST
+              value: {{ .Values.redis.host | default (printf "%s-redis" .Release.Name) | quote }}
+            - name: SPRING_REDIS_PORT
+              value: {{ .Values.redis.port | default "6379" | quote }}
+            - name: SPRING_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecret | default (printf "%s-redis" .Release.Name) }}
+                  key: {{ .Values.redis.passwordKey | default "redis-password" }}
+            # RabbitMQ connection environment variables
+            - name: SPRING_RABBITMQ_HOST
+              value: {{ .Values.rabbitmq.host | default (printf "%s-rabbitmq" .Release.Name) | quote }}
+            - name: SPRING_RABBITMQ_PORT
+              value: {{ .Values.rabbitmq.port | default "5672" | quote }}
+            - name: SPRING_RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rabbitmq.existingSecret | default (printf "%s-rabbitmq" .Release.Name) }}
+                  key: {{ .Values.rabbitmq.usernameKey | default "rabbitmq-username" }}
+            - name: SPRING_RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rabbitmq.existingSecret | default (printf "%s-rabbitmq" .Release.Name) }}
+                  key: {{ .Values.rabbitmq.passwordKey | default "rabbitmq-password" }}
+            # Application-specific environment variables
+            - name: APP_CACHE_TTL_APPLICATION_DATA
+              value: {{ .Values.app.cache.ttl.applicationData | default "900" | quote }} # 15 minutes in seconds
+            - name: APP_CACHE_TTL_USER_SESSIONS
+              value: {{ .Values.app.cache.ttl.userSessions | default "86400" | quote }} # 24 hours in seconds
+            # Security-related environment variables
+            - name: APP_SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.security.existingSecret | default (include "common.names.fullname" .) }}
+                  key: {{ .Values.app.security.jwtSecretKey | default "jwt-secret" }}
+            - name: APP_SECURITY_JWT_EXPIRATION
+              value: {{ .Values.app.security.jwtExpiration | default "3600" | quote }} # 60 minutes in seconds
+            - name: APP_SECURITY_JWT_REFRESH_EXPIRATION
+              value: {{ .Values.app.security.jwtRefreshExpiration | default "604800" | quote }} # 7 days in seconds
+            - name: APP_SECURITY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.security.existingSecret | default (include "common.names.fullname" .) }}
+                  key: {{ .Values.app.security.encryptionKey | default "encryption-key" }}
+            # Additional environment variables from values.yaml
+            {{- if .Values.env }}
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+          # Volume mounts for configuration and data
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
+            - name: config-volume
+              mountPath: /app/config
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data-volume
+              mountPath: {{ .Values.persistence.mountPath | default "/app/data" }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
+      # Default affinity rules for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - {{ include "common.names.name" . }}
+                - key: app.kubernetes.io/instance
+                  operator: In
+                  values:
+                  - {{ .Release.Name }}
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Volumes for configuration and data
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
+        - name: config-volume
+          configMap:
+            name: {{ .Values.configMapRef | default (include "common.names.fullname" .) }}
+        {{- if .Values.persistence.enabled }}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "common.names.fullname" .) }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      # Set termination grace period to allow for graceful shutdown
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}

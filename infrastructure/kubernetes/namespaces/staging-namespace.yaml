@@ -1,0 +1,57 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    app: mca
+    environment: staging
+    tier: pre-production
+  annotations:
+    description: "Staging environment for MCA Application Processing System pre-production validation"
+    monitoring.dollarfunding.com/enabled: "true"
+    monitoring.dollarfunding.com/retention: "15d"
+    scheduler.alpha.kubernetes.io/node-selector: "environment=staging"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: staging-quota
+  namespace: staging
+spec:
+  hard:
+    # Approximately 50% of production capacity as per section 8.8.2
+    pods: "100"
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    persistentvolumeclaims: "50"
+    services: "50"
+    services.loadbalancers: "5"
+    services.nodeports: "10"
+    configmaps: "100"
+    secrets: "100"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: staging
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: staging
+spec:
+  podSelector: {}
+  ingress:
+  - from:
+    - podSelector: {}
+  policyTypes:
+  - Ingress

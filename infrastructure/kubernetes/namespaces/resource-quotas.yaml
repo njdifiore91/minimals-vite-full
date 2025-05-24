@@ -1,0 +1,433 @@
+# Resource Quotas for MCA Application Processing System
+# This file defines ResourceQuota objects for each namespace to enforce resource limits
+# and prevent resource contention. It sets CPU, memory, and storage limits for each
+# environment (development, staging, production), ensuring fair resource allocation
+# and preventing any single component from consuming excessive resources.
+#
+# Key considerations:
+# - OCR Service requires GPU-enabled nodes with at least 8GB VRAM for TensorFlow processing
+# - System must process applications in under 5 minutes end-to-end
+# - System must support 99.9% uptime in production
+# - Resource allocation follows the multi-environment strategy:
+#   * Development: Minimal viable resources
+#   * Staging: Production-like with reduced scale (approximately 50% of production)
+#   * Production: Full scale with redundancy for high availability
+#
+# These quotas are designed to ensure that each environment has sufficient resources
+# to meet its performance requirements while preventing resource exhaustion.
+
+---
+# Development Environment Resource Quota
+# Minimal viable resources for development work
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mca-development-quota
+  namespace: mca-development
+  annotations:
+    description: "Development resource quota for MCA Application Processing System"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "90%"
+    monitoring.mca.dollarfunding.com/quota-monitoring: "enabled"
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: "16Gi"
+    limits.memory: "32Gi"
+    # GPU Resources for OCR Service
+    requests.nvidia.com/gpu: "1"
+    limits.nvidia.com/gpu: "1"
+    # Storage Resources
+    requests.storage: "100Gi"
+    persistentvolumeclaims: "20"
+    # Object Count Limits
+    pods: "50"
+    services: "20"
+    services.loadbalancers: "3"
+    services.nodeports: "5"
+    configmaps: "50"
+    secrets: "50"
+    replicationcontrollers: "20"
+    deployments.apps: "20"
+    statefulsets.apps: "10"
+    jobs.batch: "30"
+    cronjobs.batch: "10"
+    horizontalpodautoscalers.autoscaling: "10"
+
+---
+# Service-Specific Resource Quotas for Development
+# These quotas ensure that critical services have guaranteed resources
+
+# OCR Service Resource Quota - Development
+# Ensures GPU resources are available for OCR processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ocr-service-quota-development
+  namespace: mca-development
+  labels:
+    service: ocr-service
+    tier: processing
+  annotations:
+    description: "Resource quota for OCR Service in development"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "90%"
+spec:
+  hard:
+    # Guaranteed resources for OCR Service
+    requests.cpu: "2"
+    limits.cpu: "4"
+    requests.memory: "4Gi"
+    limits.memory: "8Gi"
+    # GPU resources for TensorFlow processing
+    requests.nvidia.com/gpu: "1"
+    limits.nvidia.com/gpu: "1"
+    # Storage for model files and temporary processing
+    requests.storage: "25Gi"
+    persistentvolumeclaims: "3"
+    # Pod limits
+    pods: "5"
+
+# Database Services Resource Quota - Development
+# Ensures PostgreSQL has sufficient resources for data processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: database-services-quota-development
+  namespace: mca-development
+  labels:
+    service: database
+    tier: data
+  annotations:
+    description: "Resource quota for database services in development"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "90%"
+spec:
+  hard:
+    # Guaranteed resources for database services
+    requests.cpu: "2"
+    limits.cpu: "4"
+    requests.memory: "4Gi"
+    limits.memory: "8Gi"
+    # Storage for database files
+    requests.storage: "50Gi"
+    persistentvolumeclaims: "5"
+    # Pod limits
+    pods: "3"
+
+# Message Queue Resource Quota - Development
+# Ensures RabbitMQ has sufficient resources for message processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: message-queue-quota-development
+  namespace: mca-development
+  labels:
+    service: rabbitmq
+    tier: messaging
+  annotations:
+    description: "Resource quota for message queue services in development"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "90%"
+spec:
+  hard:
+    # Guaranteed resources for message queue services
+    requests.cpu: "1"
+    limits.cpu: "2"
+    requests.memory: "2Gi"
+    limits.memory: "4Gi"
+    # Storage for message persistence
+    requests.storage: "10Gi"
+    persistentvolumeclaims: "2"
+    # Pod limits
+    pods: "3"
+
+---
+# Staging Environment Resource Quota
+# Production-like with reduced scale (approximately 50% of production capacity)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mca-staging-quota
+  namespace: mca-staging
+  annotations:
+    description: "Staging resource quota for MCA Application Processing System"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "80%"
+    monitoring.mca.dollarfunding.com/quota-monitoring: "enabled"
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "16"
+    limits.cpu: "32"
+    requests.memory: "32Gi"
+    limits.memory: "64Gi"
+    # GPU Resources for OCR Service
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "2"
+    # Storage Resources
+    requests.storage: "250Gi"
+    persistentvolumeclaims: "30"
+    # Object Count Limits
+    pods: "100"
+    services: "30"
+    services.loadbalancers: "5"
+    services.nodeports: "10"
+    configmaps: "75"
+    secrets: "75"
+    replicationcontrollers: "30"
+    deployments.apps: "30"
+    statefulsets.apps: "15"
+    jobs.batch: "50"
+    cronjobs.batch: "15"
+    horizontalpodautoscalers.autoscaling: "15"
+
+---
+# Service-Specific Resource Quotas for Staging
+# These quotas ensure that critical services have guaranteed resources
+
+# OCR Service Resource Quota - Staging
+# Ensures GPU resources are available for OCR processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ocr-service-quota-staging
+  namespace: mca-staging
+  labels:
+    service: ocr-service
+    tier: processing
+  annotations:
+    description: "Resource quota for OCR Service in staging"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for OCR Service
+    requests.cpu: "4"
+    limits.cpu: "8"
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    # GPU resources for TensorFlow processing
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "2"
+    # Storage for model files and temporary processing
+    requests.storage: "50Gi"
+    persistentvolumeclaims: "5"
+    # Pod limits
+    pods: "10"
+
+# Database Services Resource Quota - Staging
+# Ensures PostgreSQL has sufficient resources for data processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: database-services-quota-staging
+  namespace: mca-staging
+  labels:
+    service: database
+    tier: data
+  annotations:
+    description: "Resource quota for database services in staging"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for database services
+    requests.cpu: "4"
+    limits.cpu: "8"
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    # Storage for database files
+    requests.storage: "100Gi"
+    persistentvolumeclaims: "10"
+    # Pod limits
+    pods: "5"
+
+# Message Queue Resource Quota - Staging
+# Ensures RabbitMQ has sufficient resources for message processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: message-queue-quota-staging
+  namespace: mca-staging
+  labels:
+    service: rabbitmq
+    tier: messaging
+  annotations:
+    description: "Resource quota for message queue services in staging"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for message queue services
+    requests.cpu: "2"
+    limits.cpu: "4"
+    requests.memory: "4Gi"
+    limits.memory: "8Gi"
+    # Storage for message persistence
+    requests.storage: "25Gi"
+    persistentvolumeclaims: "3"
+    # Pod limits
+    pods: "5"
+
+---
+# Production Environment Resource Quota
+# Full scale with redundancy for high availability and performance
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mca-production-quota
+  namespace: mca-production
+  annotations:
+    description: "Production resource quota for MCA Application Processing System"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "80%"
+    monitoring.mca.dollarfunding.com/quota-monitoring: "enabled"
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "32"
+    limits.cpu: "64"
+    requests.memory: "64Gi"
+    limits.memory: "128Gi"
+    # GPU Resources for OCR Service
+    # Minimum 4 GPUs with at least 8GB VRAM each for high-performance OCR processing
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+    # Storage Resources
+    requests.storage: "500Gi"
+    persistentvolumeclaims: "50"
+    # Object Count Limits
+    pods: "200"
+    services: "50"
+    services.loadbalancers: "10"
+    services.nodeports: "15"
+    configmaps: "100"
+    secrets: "100"
+    replicationcontrollers: "50"
+    deployments.apps: "50"
+    statefulsets.apps: "25"
+    jobs.batch: "100"
+    cronjobs.batch: "25"
+    horizontalpodautoscalers.autoscaling: "25"
+
+---
+# Service-Specific Resource Quotas for Production
+# These quotas ensure that critical services have guaranteed resources
+
+# OCR Service Resource Quota - Production
+# Ensures GPU resources are available for OCR processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ocr-service-quota-production
+  namespace: mca-production
+  labels:
+    service: ocr-service
+    tier: processing
+  annotations:
+    description: "Resource quota for OCR Service in production"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for OCR Service
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: "16Gi"
+    limits.memory: "32Gi"
+    # GPU resources for TensorFlow processing
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+    # Storage for model files and temporary processing
+    requests.storage: "100Gi"
+    persistentvolumeclaims: "10"
+    # Pod limits
+    pods: "20"
+
+# Database Services Resource Quota - Production
+# Ensures PostgreSQL has sufficient resources for data processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: database-services-quota-production
+  namespace: mca-production
+  labels:
+    service: database
+    tier: data
+  annotations:
+    description: "Resource quota for database services in production"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for database services
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: "16Gi"
+    limits.memory: "32Gi"
+    # Storage for database files
+    requests.storage: "200Gi"
+    persistentvolumeclaims: "15"
+    # Pod limits
+    pods: "10"
+
+# Message Queue Resource Quota - Production
+# Ensures RabbitMQ has sufficient resources for message processing
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: message-queue-quota-production
+  namespace: mca-production
+  labels:
+    service: rabbitmq
+    tier: messaging
+  annotations:
+    description: "Resource quota for message queue services in production"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for message queue services
+    requests.cpu: "4"
+    limits.cpu: "8"
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    # Storage for message persistence
+    requests.storage: "50Gi"
+    persistentvolumeclaims: "5"
+    # Pod limits
+    pods: "10"
+
+---
+# Cache Services Resource Quota - Production
+# Ensures Redis has sufficient resources for caching
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cache-services-quota-production
+  namespace: mca-production
+  labels:
+    service: redis
+    tier: caching
+  annotations:
+    description: "Resource quota for cache services in production"
+    monitoring.mca.dollarfunding.com/alert-on-threshold: "75%"
+spec:
+  hard:
+    # Guaranteed resources for cache services
+    requests.cpu: "4"
+    limits.cpu: "8"
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    # Storage for cache persistence
+    requests.storage: "20Gi"
+    persistentvolumeclaims: "3"
+    # Pod limits
+    pods: "6"
+
+# Note: These resource quotas are designed to ensure that the MCA Application Processing System
+# can meet its performance requirements while preventing resource exhaustion. The quotas are
+# structured to provide sufficient resources for each environment and service tier, with
+# special attention to the OCR Service which requires GPU resources for TensorFlow processing.
+#
+# The quotas follow a tiered approach:
+# - Development: Minimal viable resources for development work
+# - Staging: Production-like with reduced scale (approximately 50% of production)
+# - Production: Full scale with redundancy for high availability and performance
+#
+# Service-specific quotas ensure that critical services like OCR processing, database operations,
+# message queuing, and caching have guaranteed resources to maintain system performance and uptime.
+#
+# These quotas should be reviewed and adjusted periodically based on actual usage patterns and
+# performance metrics to ensure optimal resource allocation.

@@ -1,0 +1,15 @@
+{{- /*
+Document Service PersistentVolumeClaim Template
+
+This template extends the common PVC template with Document Service specific configurations.
+It creates persistent volume claims for model data storage.
+
+Features:
+- Persistent storage for ML models and training data
+- Configurable storage size and access mode
+- Support for different storage classes based on environment
+*/}}
+
+{{- if .Values.persistentVolumeClaims.modelData.enabled }}
+{{- template "common.pvc" (dict "root" . "name" "model-data" "accessMode" .Values.persistentVolumeClaims.modelData.accessMode "size" .Values.persistentVolumeClaims.modelData.size "storageClass" .Values.persistentVolumeClaims.modelData.storageClass) }}
+{{- end }}

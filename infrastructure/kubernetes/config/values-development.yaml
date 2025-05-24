@@ -1,0 +1,419 @@
+# Development environment configuration values for MCA Application Processing System
+# This file contains development-specific overrides for the common values
+
+# Global settings
+global:
+  environment: development
+  domain: api-dev.dollarfunding.local
+  # Enable DEBUG level logging for development
+  logLevel: DEBUG
+  monitoring:
+    enabled: true
+    datadog:
+      enabled: false  # Disable Datadog in development
+  featureFlags:
+    automationEnabled: true
+    aiOcrEnabled: true
+    webhooksEnabled: true
+    # Development-specific feature flags
+    debugMode: true
+    mockServices: false
+    performanceMetrics: true
+
+# Database configuration
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  readReplicas:
+    # No read replicas for development environment
+    replicaCount: 0
+  auth:
+    username: postgres
+    password: postgres
+    database: mca_development
+  connectionPool:
+    maxConnections: 20
+    minConnections: 2
+    maxIdleTime: 60000
+
+# Redis cache configuration
+redis:
+  enabled: true
+  cluster:
+    enabled: false  # Use standalone Redis for development
+    slaveCount: 0
+  sentinel:
+    enabled: false
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  auth:
+    password: redis
+  config:
+    # TTL settings as specified in technical specification
+    # 15 minutes for application data, 24 hours for user sessions
+    maxmemory-policy: volatile-lru
+    appendonly: "yes"
+    ttl:
+      applicationData: 900  # 15 minutes in seconds
+      userSessions: 86400  # 24 hours in seconds
+
+# RabbitMQ configuration
+rabbitmq:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  clustering:
+    enabled: false
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  auth:
+    username: guest
+    password: guest
+  # Message exchanges and queues as specified in technical specification
+  exchanges:
+    - name: mca.documents
+      type: fanout
+      durable: true
+  queues:
+    - name: document-processing
+      durable: true
+    - name: data-extraction
+      durable: true
+    - name: notification
+      durable: true
+  plugins:
+    - rabbitmq_management
+    - rabbitmq_prometheus
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false  # Disable service monitor in development
+
+# S3-compatible storage configuration
+s3Storage:
+  enabled: true
+  # Local MinIO instance for development
+  bucketName: mca-documents-development
+  region: us-east-1
+  endpoint: http://minio:9000
+  credentials:
+    accessKey: minioadmin
+    secretKey: minioadmin
+  encryption:
+    # AES-256 encryption for document storage as specified
+    enabled: true
+    type: AES256
+  versioning:
+    enabled: true
+  lifecycle:
+    enabled: false  # Disable lifecycle rules in development
+
+# Email Service configuration
+emailService:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: dollarfunding/email-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  config:
+    imap:
+      host: localhost
+      port: 993
+      user: submissions-dev@dollarfunding.local
+      password: password
+      secure: false  # Disable secure connection for local development
+      pollInterval: 30  # seconds, more frequent for development
+    rabbitmq:
+      exchange: mca.documents
+      routingKey: email.received
+    # Development-specific debug settings
+    debug:
+      enabled: true
+      saveRawEmails: true
+      logPayloads: true
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+
+# Document Service configuration
+documentService:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: dollarfunding/document-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - document-processing
+    s3:
+      bucketName: mca-documents-development
+    modelPath: /app/models
+    # Development-specific debug settings
+    debug:
+      enabled: true
+      saveIntermediateResults: true
+      logClassificationScores: true
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+  persistence:
+    enabled: true
+    size: 1Gi
+    mountPath: /app/models
+
+# OCR Service configuration
+ocrService:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: dollarfunding/ocr-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    # Minimal GPU resources for development, can use CPU only if needed
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: 0  # No GPU required for development
+    limits:
+      cpu: 1
+      memory: 2Gi
+      nvidia.com/gpu: 0  # No GPU required for development
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - data-extraction
+    s3:
+      bucketName: mca-documents-development
+    modelPath: /app/models
+    confidenceThreshold: 0.7  # Lower threshold for development
+    # Development-specific debug settings
+    debug:
+      enabled: true
+      saveIntermediateResults: true
+      logConfidenceScores: true
+      useCpuFallback: true  # Allow CPU fallback for development
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+  persistence:
+    enabled: true
+    size: 2Gi
+    mountPath: /app/models
+  nodeSelector: {}  # No specific node selector for development
+
+# Data Service configuration
+dataService:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: dollarfunding/data-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - notification
+    database:
+      url: jdbc:postgresql://postgresql:5432/mca_development
+      username: postgres
+      password: postgres
+      poolSize: 10
+    redis:
+      host: redis
+      port: 6379
+      password: redis
+    encryption:
+      enabled: true
+      algorithm: AES-256
+      key: development-encryption-key
+    # Development-specific debug settings
+    debug:
+      enabled: true
+      logSqlQueries: true
+      showStackTraces: true
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+  flyway:
+    enabled: true
+    locations: classpath:db/migrations
+
+# Notification Service configuration
+notificationService:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: dollarfunding/notification-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - notification
+    redis:
+      host: redis
+      port: 6379
+      password: redis
+    webhook:
+      retryCount: 3
+      retryDelay: 10  # seconds, shorter for development
+      timeout: 10  # seconds, shorter for development
+    # Development-specific debug settings
+    debug:
+      enabled: true
+      logWebhookPayloads: true
+      mockExternalServices: true
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+
+# API Gateway configuration
+apiGateway:
+  enabled: true
+  replicaCount: 1  # Single replica for development
+  image:
+    repository: kong/kong-gateway
+    tag: 3.0
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  config:
+    database:
+      enabled: false  # Use DB-less mode
+    admin:
+      enabled: true
+      http:
+        enabled: true
+        port: 8001
+      tls:
+        enabled: false
+    proxy:
+      enabled: true
+      http:
+        enabled: true
+        port: 80
+      tls:
+        enabled: false  # Disable TLS in development
+    ingressController:
+      enabled: true
+      installCRDs: false
+  autoscaling:
+    enabled: false  # Disable autoscaling in development
+  plugins:
+    - name: jwt
+      config:
+        secret_is_base64: false
+        key_claim_name: kid
+        claims_to_verify:
+          - exp
+    - name: rate-limiting
+      config:
+        second: 100  # Higher rate limits for development
+        minute: 1000
+        hour: 10000
+        policy: local
+    - name: cors
+      config:
+        origins:
+          - http://localhost:3000
+          - http://localhost:5173
+        methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        headers:
+          - Authorization
+          - Content-Type
+        credentials: true
+        max_age: 3600
+
+# Ingress configuration
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"  # Disable SSL redirect in development
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: api-dev.dollarfunding.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []  # No TLS in development
+
+# Monitoring and observability configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: false  # Disable service monitor in development
+  grafana:
+    enabled: true
+    adminPassword: admin
+    dashboards:
+      enabled: true
+  alertmanager:
+    enabled: false  # Disable alertmanager in development

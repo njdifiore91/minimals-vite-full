@@ -1,0 +1,47 @@
+/**
+ * Mock S3 GetObject response for document retrieval testing
+ * 
+ * This file simulates the response structure when retrieving a document from S3-compatible storage.
+ * It includes metadata, content type, and base64-encoded document content for testing document
+ * retrieval functionality without requiring an actual S3 connection.
+ * 
+ * The mock represents a PDF application form with realistic metadata and a truncated base64-encoded
+ * content that would be returned by the AWS S3 GetObject API.
+ */
+{
+  "AcceptRanges": "bytes",
+  "LastModified": "2025-03-15T14:32:28.000Z",
+  "ContentLength": 245879,
+  "ETag": "\"a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6\"",
+  "VersionId": "v1.0.0.20250315143228",
+  "ContentType": "application/pdf",
+  "ServerSideEncryption": "AES256",
+  "Metadata": {
+    "document-type": "application-form",
+    "merchant-id": "MID12345678",
+    "application-id": "APP987654321",
+    "uploaded-by": "submissions@dollarfunding.com",
+    "upload-timestamp": "2025-03-15T14:30:15Z",
+    "classification-confidence": "0.98",
+    "document-pages": "5",
+    "processing-status": "extracted",
+    "ocr-completed": "true",
+    "ocr-timestamp": "2025-03-15T14:31:45Z",
+    "extraction-accuracy": "0.97",
+    "document-source": "email-attachment",
+    "original-filename": "ACME_Corp_MCA_Application.pdf"
+  },
+  "StorageClass": "STANDARD",
+  "ReplicationStatus": "COMPLETED",
+  "PartsCount": 1,
+  "TagCount": 3,
+  "ObjectLockMode": "GOVERNANCE",
+  "ObjectLockRetainUntilDate": "2032-03-15T00:00:00.000Z",
+  "ChecksumAlgorithm": "SHA256",
+  "ChecksumSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "RequestCharged": "requester",
+  "Body": {
+    "type": "Buffer",
+    "data": "JVBERi0xLjcKJeLjz9MKNSAwIG9iago8PCAvVHlwZSAvWE9iamVjdCAvU3VidHlwZSAvSW1hZ2UgL1dpZHRoIDEyMDAgL0hlaWdodCA4MDAgL0JpdHNQZXJDb21wb25lbnQgOCAvQ29sb3JTcGFjZSAvRGV2aWNlUkdCIC9GaWx0ZXIgL0RDVERlY29kZSAvTGVuZ3RoIDI0MDAwID4+CnN0cmVhbQpNZXJjaGFudCBDYXNoIEFkdmFuY2UgQXBwbGljYXRpb24gRm9ybQoKQnVzaW5lc3MgSW5mb3JtYXRpb246CkxlZ2FsIEJ1c2luZXNzIE5hbWU6IEFDTUUgQ29ycG9yYXRpb24KRGF0ZSBCdXNpbmVzcyBTdGFydGVkOiAwMS8xNS8yMDE4CkJ1c2luZXNzIFR5cGU6IENvcnBvcmF0aW9uCkZlZGVyYWwgVGF4IElEOiAxMi0zNDU2Nzg5CkJ1c2luZXNzIEFkZHJlc3M6IDEyMyBNYWluIFN0cmVldCwgQW55dG93biwgQ0EgOTAwMDEKQnVzaW5lc3MgUGhvbmU6ICg1NTUpIDEyMy00NTY3CkJ1c2luZXNzIEVtYWlsOiBpbmZvQGFjbWVjb3JwLmNvbQoKT3duZXIgSW5mb3JtYXRpb246Ck5hbWU6IEpvaG4gRG9lClRpdGxlOiBDRU8KT3duZXJzaGlwICU6IDEwMCUKU1NOOiAxMjMtNDUtNjc4OQpIb21lIEFkZHJlc3M6IDQ1NiBPYWsgTGFuZSwgQW55dG93biwgQ0EgOTAwMDEKUGhvbmU6ICg1NTUpIDk4Ny02NTQzCkVtYWlsOiBqb2huLmRvZUBhY21lY29ycC5jb20KCkZ1bmRpbmcgUmVxdWVzdDoKQW1vdW50IFJlcXVlc3RlZDogJDEwMCwwMDAKUHVycG9zZSBvZiBGdW5kczogRXhwYW5zaW9uIG9mIGJ1c2luZXNzIG9wZXJhdGlvbnMKCkJ1c2luZXNzIEZpbmFuY2lhbCBJbmZvcm1hdGlvbjoKQXZlcmFnZSBNb250aGx5IFJldmVudWU6ICQxNTAsMDAwCkF2ZXJhZ2UgQmFuayBCYWxhbmNlOiAkNzUsMDAwCkN1cnJlbnQgT3V0c3RhbmRpbmcgTG9hbnM6ICQyNSwwMDAKCkJ1c2luZXNzIEJhbmsgSW5mb3JtYXRpb246CkJhbmsgTmFtZTogRmlyc3QgTmF0aW9uYWwgQmFuawpBY2NvdW50IE51bWJlcjogKioqKioqNzg5MApSb3V0aW5nIE51bWJlcjogMDEyMzQ1Njc4CgpJIGhlcmVieSBjZXJ0aWZ5IHRoYXQgdGhlIGluZm9ybWF0aW9uIHByb3ZpZGVkIGlzIHRydWUgYW5kIGFjY3VyYXRlLgoKX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fCkpvaG4gRG9lLCBDRU8gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgRGF0ZQoKCgpGb3IgT2ZmaWNpYWwgVXNlIE9ubHk6CkFwcGxpY2F0aW9uIElEOiBBUFA5ODc2NTQzMjEKUmVjZWl2ZWQgRGF0ZTogMDMvMTUvMjAyNQpQcm9jZXNzZWQgQnk6IERvbGxhciBGdW5kaW5nIE1DQSBEZXBhcnRtZW50"
+  }
+}

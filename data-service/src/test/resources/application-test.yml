@@ -1,0 +1,163 @@
+# ===============================
+# TEST CONFIGURATION
+# ===============================
+# This file contains test-specific configuration that overrides the main application.yml settings
+
+# ===============================
+# SERVER CONFIGURATION
+# ===============================
+server:
+  port: 0 # Random port for testing to avoid conflicts
+
+# ===============================
+# SPRING CONFIGURATION
+# ===============================
+spring:
+  # Application name
+  application:
+    name: mca-data-service-test
+  
+  # Disable security for testing
+  security:
+    enabled: false
+  
+  # Database configuration - Use H2 in-memory database for testing
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 20000
+  
+  # JPA/Hibernate configuration
+  jpa:
+    hibernate:
+      ddl-auto: none # Flyway will handle schema creation
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+        show_sql: true
+        use_sql_comments: true
+    open-in-view: false
+    defer-datasource-initialization: false # Ensure Flyway runs before any data.sql scripts
+  
+  # Flyway migration configuration for testing
+  flyway:
+    enabled: true
+    locations: classpath:db/migrations
+    baseline-on-migrate: true
+    clean-on-validation-error: true
+    clean-disabled: false # Allow database cleaning for tests
+  
+  # Redis configuration - Use embedded Redis for testing
+  redis:
+    embedded: true
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 2000
+    connect-timeout: 2000
+    lettuce:
+      shutdown-timeout: 100ms
+  
+  # RabbitMQ configuration - Use test-specific settings
+  rabbitmq:
+    embedded: true
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    listener:
+      simple:
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          max-interval: 10000
+          multiplier: 2.0
+        auto-startup: false # Disable auto-startup of listeners for testing
+    template:
+      reply-timeout: 5000
+  
+  # Cache configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: 900000 # 15 minutes
+      cache-null-values: false
+  
+  # Test-specific configuration
+  test:
+    database:
+      replace: none # Don't replace the DataSource defined above
+
+# ===============================
+# MANAGEMENT (ACTUATOR) CONFIGURATION
+# ===============================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*' # Expose all endpoints for testing
+  endpoint:
+    health:
+      show-details: always
+    shutdown:
+      enabled: true
+
+# ===============================
+# LOGGING CONFIGURATION
+# ===============================
+logging:
+  level:
+    root: INFO
+    com.dollarfunding.mca: DEBUG
+    org.springframework: INFO
+    org.hibernate: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+# ===============================
+# APPLICATION-SPECIFIC CONFIGURATION
+# ===============================
+app:
+  # JWT configuration for testing
+  jwt:
+    secret: test-secret-key-for-jwt-token-generation-and-validation-purposes-only
+    expiration: 3600000 # 1 hour
+    issuer: mca-test
+    audience: mca-test-client
+  
+  # S3 configuration - Use mock S3 endpoint
+  s3:
+    endpoint: http://localhost:9000
+    region: us-east-1
+    bucket: mca-documents-test
+    access-key: minioadmin
+    secret-key: minioadmin
+    path-style-access: true # Required for MinIO/LocalStack
+  
+  # Document processing configuration
+  document:
+    storage-path: ${java.io.tmpdir}/mca-test-documents
+    allowed-types: application/pdf,image/jpeg,image/png,image/tiff
+    max-size: 10485760 # 10MB
+  
+  # Application processing configuration
+  application:
+    processing:
+      timeout: 300000 # 5 minutes
+      retry-attempts: 3
+      retry-delay: 5000 # 5 seconds
+  
+  # Webhook configuration
+  webhook:
+    retry-attempts: 3
+    retry-delay: 5000 # 5 seconds
+    timeout: 10000 # 10 seconds

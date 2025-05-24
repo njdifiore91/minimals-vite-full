@@ -1,0 +1,193 @@
+{{- /*
+OCR Service ConfigMap Template
+
+This template creates a Kubernetes ConfigMap for the OCR Service, extending the common
+configmap template with OCR Service specific configuration. It includes settings for
+TensorFlow, RabbitMQ connection, S3 storage, and application parameters.
+
+The OCR Service is responsible for extracting data from documents using machine learning
+models with TensorFlow. It processes messages from RabbitMQ queues and stores extracted
+data in S3-compatible storage.
+*/}}
+
+{{- $fullname := include "common.fullname" . -}}
+{{- $name := include "common.name" . -}}
+
+{{- /* Set default OCR Service configuration values */}}
+{{- $defaultConfig := dict }}
+{{- $defaultData := dict }}
+
+{{- /* TensorFlow settings */}}
+{{- /* Path to the TensorFlow models directory */}}
+{{- $_ := set $defaultData "TF_MODEL_PATH" "/app/models" }}
+{{- /* Number of documents to process in a single batch */}}
+{{- $_ := set $defaultData "TF_BATCH_SIZE" "16" }}
+{{- /* Minimum confidence score required for text extraction */}}
+{{- $_ := set $defaultData "TF_CONFIDENCE_THRESHOLD" "0.85" }}
+{{- /* Fraction of GPU memory to allocate for TensorFlow */}}
+{{- $_ := set $defaultData "TF_GPU_MEMORY_FRACTION" "0.8" }}
+{{- /* Enable GPU acceleration for TensorFlow */}}
+{{- $_ := set $defaultData "TF_ENABLE_GPU" "true" }}
+{{- /* Number of threads used for parallel operations between independent operations */}}
+{{- $_ := set $defaultData "TF_INTER_OP_PARALLELISM_THREADS" "4" }}
+{{- /* Number of threads used for parallel operations within an operation */}}
+{{- $_ := set $defaultData "TF_INTRA_OP_PARALLELISM_THREADS" "4" }}
+
+{{- /* RabbitMQ connection settings */}}
+{{- /* Hostname of the RabbitMQ service */}}
+{{- $_ := set $defaultData "RABBITMQ_HOST" "rabbitmq.{{ .Release.Namespace }}.svc.cluster.local" }}
+{{- /* Port for the RabbitMQ service */}}
+{{- $_ := set $defaultData "RABBITMQ_PORT" "5672" }}
+{{- /* Username for RabbitMQ authentication */}}
+{{- $_ := set $defaultData "RABBITMQ_USERNAME" "{{ .Values.rabbitmq.username }}" }}
+{{- /* Virtual host for RabbitMQ */}}
+{{- $_ := set $defaultData "RABBITMQ_VHOST" "/" }}
+{{- /* Exchange for document processing messages */}}
+{{- $_ := set $defaultData "RABBITMQ_EXCHANGE" "mca.documents" }}
+{{- /* Queue for OCR data extraction tasks */}}
+{{- $_ := set $defaultData "RABBITMQ_QUEUE" "data-extraction" }}
+{{- /* Routing key for OCR extraction messages */}}
+{{- $_ := set $defaultData "RABBITMQ_ROUTING_KEY" "ocr.extraction" }}
+{{- /* Exchange for OCR result messages */}}
+{{- $_ := set $defaultData "RABBITMQ_RESULT_EXCHANGE" "mca.documents" }}
+{{- /* Routing key for OCR result messages */}}
+{{- $_ := set $defaultData "RABBITMQ_RESULT_ROUTING_KEY" "ocr.result" }}
+{{- /* Enable TLS for RabbitMQ connections */}}
+{{- $_ := set $defaultData "RABBITMQ_USE_TLS" "true" }}
+{{- /* Heartbeat interval in seconds for RabbitMQ connections */}}
+{{- $_ := set $defaultData "RABBITMQ_HEARTBEAT" "60" }}
+{{- /* Connection timeout in seconds for RabbitMQ */}}
+{{- $_ := set $defaultData "RABBITMQ_CONNECTION_TIMEOUT" "30" }}
+
+{{- /* S3 storage settings */}}
+{{- /* S3-compatible storage endpoint URL */}}
+{{- $_ := set $defaultData "S3_ENDPOINT" "{{ .Values.s3.endpoint }}" }}
+{{- /* AWS region for S3 bucket */}}
+{{- $_ := set $defaultData "S3_REGION" "{{ .Values.s3.region }}" }}
+{{- /* S3 bucket name for document storage */}}
+{{- $_ := set $defaultData "S3_BUCKET" "{{ .Values.s3.bucket }}" }}
+{{- /* Enable SSL for S3 connections */}}
+{{- $_ := set $defaultData "S3_USE_SSL" "true" }}
+{{- /* Verify SSL certificates for S3 connections */}}
+{{- $_ := set $defaultData "S3_VERIFY_SSL" "true" }}
+{{- /* Encryption method for S3 objects (AES256 required per spec) */}}
+{{- $_ := set $defaultData "S3_ENCRYPTION" "AES256" }}
+{{- /* Prefix for document objects in S3 bucket */}}
+{{- $_ := set $defaultData "S3_DOCUMENT_PREFIX" "documents/" }}
+{{- /* Prefix for OCR result objects in S3 bucket */}}
+{{- $_ := set $defaultData "S3_RESULT_PREFIX" "results/" }}
+
+{{- /* Application parameters */}}
+{{- /* Name of the application */}}
+{{- $_ := set $defaultData "APP_NAME" "ocr-service" }}
+{{- /* Port the application listens on */}}
+{{- $_ := set $defaultData "APP_PORT" "8080" }}
+{{- /* Logging level (debug, info, warn, error) */}}
+{{- $_ := set $defaultData "LOG_LEVEL" "info" }}
+{{- /* Maximum time in seconds for processing a document */}}
+{{- $_ := set $defaultData "PROCESSING_TIMEOUT" "300" }}
+{{- /* Maximum document size in MB that can be processed */}}
+{{- $_ := set $defaultData "MAX_DOCUMENT_SIZE_MB" "20" }}
+{{- /* Number of parallel workers for extraction tasks */}}
+{{- $_ := set $defaultData "EXTRACTION_WORKERS" "4" }}
+{{- /* Enable handwritten text recognition */}}
+{{- $_ := set $defaultData "ENABLE_HANDWRITTEN_TEXT" "true" }}
+{{- /* Enable typed text recognition */}}
+{{- $_ := set $defaultData "ENABLE_TYPED_TEXT" "true" }}
+{{- /* Enable table structure extraction */}}
+{{- $_ := set $defaultData "ENABLE_TABLE_EXTRACTION" "true" }}
+{{- /* Enable form field extraction */}}
+{{- $_ := set $defaultData "ENABLE_FORM_EXTRACTION" "true" }}
+{{- /* Number of retry attempts for failed operations */}}
+{{- $_ := set $defaultData "RETRY_COUNT" "3" }}
+{{- /* Delay in seconds between retry attempts */}}
+{{- $_ := set $defaultData "RETRY_DELAY" "5" }}
+
+{{- /* OCR model settings - Configuration for different types of OCR models */}}
+{{- $ocrModels := dict }}
+{{- /* Model for typed text recognition with higher confidence threshold */}}
+{{- $_ := set $ocrModels "typed_text" (dict "name" "typed_text_model" "version" "1.0.0" "min_confidence" 0.75) }}
+{{- /* Model for handwritten text recognition with lower confidence threshold due to complexity */}}
+{{- $_ := set $ocrModels "handwritten_text" (dict "name" "handwritten_text_model" "version" "1.0.0" "min_confidence" 0.65) }}
+{{- /* Model for table structure extraction with high confidence to ensure accuracy */}}
+{{- $_ := set $ocrModels "table" (dict "name" "table_extraction_model" "version" "1.0.0" "min_confidence" 0.80) }}
+{{- /* Model for form field extraction with balanced confidence threshold */}}
+{{- $_ := set $ocrModels "form" (dict "name" "form_extraction_model" "version" "1.0.0" "min_confidence" 0.70) }}
+
+{{- $defaultJson := dict }}
+{{- $_ := set $defaultJson "ocr-models.json" $ocrModels }}
+
+{{- $defaultYaml := dict }}
+{{- $_ := set $defaultYaml "extraction-config.yaml" (dict "extraction" (dict "enable_gpu" true "batch_size" 16 "confidence_threshold" 0.85 "timeout" 300)) }}
+
+{{- /* Set default config with data, json, and yaml sections */}}
+{{- $_ := set $defaultConfig "data" $defaultData }}
+{{- $_ := set $defaultConfig "json" $defaultJson }}
+{{- $_ := set $defaultConfig "yaml" $defaultYaml }}
+
+{{- /* Merge OCR Service specific configuration with default values */}}
+{{- $ocrConfig := dict }}
+{{- if .Values.config }}
+  {{- $ocrConfig = .Values.config | deepCopy }}
+{{- end }}
+{{- $mergedConfig := merge $ocrConfig $defaultConfig }}
+
+{{- /* Include the common configmap template with merged configuration */}}
+{{- include "common.configmap" (dict "Values" (dict "config" $mergedConfig) "Chart" .Chart "Release" .Release) }}
+
+{{- /* Create environment-specific configmap if environmentConfig is defined */}}
+{{- if .Values.environmentConfig }}
+  {{- include "common.configmap.env" . }}
+{{- else }}
+  {{- /* 
+  Define default environment-specific configurations
+  
+  The OCR Service has different configuration requirements based on the deployment environment:
+  
+  - Development: Uses debug logging, disables GPU acceleration for local development,
+    and disables TLS/SSL for easier local testing and debugging.
+  
+  - Staging: Increases batch size and worker count for better performance while
+    maintaining detailed logging for monitoring and troubleshooting.
+  
+  - Production: Maximizes resource utilization with larger batch sizes, more workers,
+    higher GPU memory allocation, and longer processing timeouts to handle peak loads.
+    Uses minimal logging to reduce overhead.
+  */}}
+  {{- $envConfig := dict }}
+  
+  {{- /* Development environment */}}
+  {{- $devConfig := dict }}
+  {{- $devData := dict }}
+  {{- $_ := set $devData "LOG_LEVEL" "debug" }}
+  {{- $_ := set $devData "TF_ENABLE_GPU" "false" }}
+  {{- $_ := set $devData "RABBITMQ_USE_TLS" "false" }}
+  {{- $_ := set $devData "S3_VERIFY_SSL" "false" }}
+  {{- $_ := set $devConfig "data" $devData }}
+  
+  {{- /* Staging environment */}}
+  {{- $stagingConfig := dict }}
+  {{- $stagingData := dict }}
+  {{- $_ := set $stagingData "LOG_LEVEL" "info" }}
+  {{- $_ := set $stagingData "TF_BATCH_SIZE" "32" }}
+  {{- $_ := set $stagingData "EXTRACTION_WORKERS" "8" }}
+  {{- $_ := set $stagingConfig "data" $stagingData }}
+  
+  {{- /* Production environment */}}
+  {{- $prodConfig := dict }}
+  {{- $prodData := dict }}
+  {{- $_ := set $prodData "LOG_LEVEL" "warn" }}
+  {{- $_ := set $prodData "TF_BATCH_SIZE" "64" }}
+  {{- $_ := set $prodData "TF_GPU_MEMORY_FRACTION" "0.9" }}
+  {{- $_ := set $prodData "EXTRACTION_WORKERS" "16" }}
+  {{- $_ := set $prodData "PROCESSING_TIMEOUT" "600" }}
+  {{- $_ := set $prodConfig "data" $prodData }}
+  
+  {{- /* Set environment configurations */}}
+  {{- $_ := set $envConfig "development" $devConfig }}
+  {{- $_ := set $envConfig "staging" $stagingConfig }}
+  {{- $_ := set $envConfig "production" $prodConfig }}
+  
+  {{- /* Include common.configmap.env with environment configurations */}}
+  {{- include "common.configmap.env" (dict "Values" (dict "environmentConfig" $envConfig) "Chart" .Chart "Release" .Release) }}
+{{- end }}

@@ -1,0 +1,250 @@
+# Terraform Plan Workflow
+# This workflow runs when infrastructure code changes are pushed or pull requests are created.
+# It performs initialization, validation, and plan generation for Terraform configurations.
+
+name: Terraform Plan
+
+# Trigger on push to infrastructure directories or pull requests that modify infrastructure code
+on:
+  push:
+    paths:
+      - 'infrastructure/terraform/**'
+      - 'infrastructure/kubernetes/**'
+      - '.github/workflows/terraform-*.yml'
+  pull_request:
+    paths:
+      - 'infrastructure/terraform/**'
+      - 'infrastructure/kubernetes/**'
+      - '.github/workflows/terraform-*.yml'
+
+# Environment variables used across jobs
+env:
+  TF_LOG: INFO
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+
+jobs:
+  # Determine which environments need to be planned based on changed files
+  detect-environment:
+    name: Detect Environment Changes
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.set-environments.outputs.environments }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Environments
+        id: set-environments
+        run: |
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} || git diff --name-only origin/main HEAD)
+          
+          # Initialize environments array
+          ENVIRONMENTS=[]
+          
+          # Check for changes in each environment directory
+          if echo "$CHANGED_FILES" | grep -q "infrastructure/terraform/environments/development"; then
+            ENVIRONMENTS=$(echo $ENVIRONMENTS | jq '. += ["development"]')
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "infrastructure/terraform/environments/staging"; then
+            ENVIRONMENTS=$(echo $ENVIRONMENTS | jq '. += ["staging"]')
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "infrastructure/terraform/environments/production"; then
+            ENVIRONMENTS=$(echo $ENVIRONMENTS | jq '. += ["production"]')
+          fi
+          
+          # If no specific environment changes detected, plan all environments
+          if [ "$ENVIRONMENTS" == "[]" ]; then
+            ENVIRONMENTS='["development", "staging", "production"]'
+          fi
+          
+          echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
+          echo "Detected environments for planning: $ENVIRONMENTS"
+
+  # Run Terraform plan for each affected environment
+  terraform-plan:
+    name: Terraform Plan - ${{ matrix.environment }}
+    needs: detect-environment
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-environment.outputs.environments) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive -diff
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -backend-config=backend.tf
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
+
+      - name: TFSec Security Scan
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infrastructure/terraform/environments/${{ matrix.environment }}
+          format: sarif
+          soft_fail: true
+          output_file: tfsec-results.sarif
+          # Check for security best practices in Terraform code
+          args: --config-file=.tfsec.yml --exclude-downloaded-modules
+
+      - name: Upload TFSec Results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: infrastructure/terraform/environments/${{ matrix.environment }}/tfsec-results.sarif
+          category: tfsec-${{ matrix.environment }}
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -out=tfplan-${{ matrix.environment }}.binary \
+            -detailed-exitcode
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
+        continue-on-error: true
+
+      - name: Generate Plan Output
+        if: steps.plan.outcome == 'success'
+        run: |
+          terraform show -no-color tfplan-${{ matrix.environment }}.binary > tfplan-${{ matrix.environment }}.txt
+          terraform show -json tfplan-${{ matrix.environment }}.binary > tfplan-${{ matrix.environment }}.json
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
+
+      - name: Generate Cost Estimation
+        if: steps.plan.outcome == 'success'
+        uses: infracost/infracost-action@v3
+        with:
+          path: infrastructure/terraform/environments/${{ matrix.environment }}/tfplan-${{ matrix.environment }}.json
+          terraform_plan_flags: -var-file=terraform.tfvars
+          usage_file: infrastructure/terraform/environments/${{ matrix.environment }}/infracost-usage.yml
+          api_key: ${{ secrets.INFRACOST_API_KEY }}
+          currency: USD
+          show_skipped: true
+          terraform_workspace: ${{ matrix.environment }}
+          output_path: infrastructure/terraform/environments/${{ matrix.environment }}/infracost-${{ matrix.environment }}.json
+
+      - name: Store Plan Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: |
+            infrastructure/terraform/environments/${{ matrix.environment }}/tfplan-${{ matrix.environment }}.binary
+            infrastructure/terraform/environments/${{ matrix.environment }}/tfplan-${{ matrix.environment }}.txt
+            infrastructure/terraform/environments/${{ matrix.environment }}/tfplan-${{ matrix.environment }}.json
+            infrastructure/terraform/environments/${{ matrix.environment }}/infracost-${{ matrix.environment }}.json
+          retention-days: 7
+
+      - name: Plan Status
+        if: steps.plan.outcome == 'success'
+        run: |
+          if [ ${{ steps.plan.outputs.exitcode }} -eq 0 ]; then
+            echo "No changes detected for ${{ matrix.environment }} environment"
+            echo "## ${{ matrix.environment }} - No Changes Required" >> $GITHUB_STEP_SUMMARY
+            echo "Terraform plan completed successfully with no changes required." >> $GITHUB_STEP_SUMMARY
+          elif [ ${{ steps.plan.outputs.exitcode }} -eq 2 ]; then
+            echo "Changes detected for ${{ matrix.environment }} environment"
+            echo "## ${{ matrix.environment }} - Changes Detected" >> $GITHUB_STEP_SUMMARY
+            echo "Terraform plan detected the following changes:" >> $GITHUB_STEP_SUMMARY
+            echo '```hcl' >> $GITHUB_STEP_SUMMARY
+            sed -n '/Plan:/,/\n$/p' infrastructure/terraform/environments/${{ matrix.environment }}/tfplan-${{ matrix.environment }}.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Terraform plan failed for ${{ matrix.environment }} environment"
+            echo "## ${{ matrix.environment }} - Plan Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Terraform plan failed with exit code ${{ steps.plan.outputs.exitcode }}" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      # Include quality gates template for standardized checks
+      - name: Run Quality Gates
+        uses: ./.github/actions/quality-gates
+        with:
+          type: infrastructure
+          environment: ${{ matrix.environment }}
+
+  # Summarize all plans and notify team
+  plan-summary:
+    name: Terraform Plan Summary
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Download All Plan Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: plan-artifacts
+
+      - name: Generate Plan Summary
+        run: |
+          echo "# Terraform Plan Summary" > plan-summary.md
+          echo "" >> plan-summary.md
+          echo "## Environment Plans" >> plan-summary.md
+          
+          for env_dir in plan-artifacts/terraform-plan-*; do
+            env_name=$(basename $env_dir | sed 's/terraform-plan-//')
+            echo "### $env_name Environment" >> plan-summary.md
+            
+            if [ -f "$env_dir/tfplan-$env_name.txt" ]; then
+              echo '```hcl' >> plan-summary.md
+              # Get just the summary section from the plan output
+              sed -n '/Plan:/,/\n$/p' "$env_dir/tfplan-$env_name.txt" >> plan-summary.md
+              echo '```' >> plan-summary.md
+              
+              # Add cost estimation if available
+              if [ -f "$env_dir/infracost-$env_name.json" ]; then
+                echo "#### Cost Estimation" >> plan-summary.md
+                echo '```' >> plan-summary.md
+                jq -r '.totalMonthlyCost, .diffTotalMonthlyCost' "$env_dir/infracost-$env_name.json" | \
+                  awk 'BEGIN {print "Monthly Cost: "} NR==1 {printf "$%.2f\n", $1} NR==2 {printf "Difference: $%.2f\n", $1}' >> plan-summary.md
+                echo '```' >> plan-summary.md
+              fi
+            else
+              echo "No plan generated for this environment." >> plan-summary.md
+            fi
+            
+            echo "" >> plan-summary.md
+          done
+
+      - name: Upload Plan Summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-summary
+          path: plan-summary.md
+          retention-days: 7
+
+      # Include notification template for standardized alerts
+      - name: Send Notifications
+        uses: ./.github/actions/notification
+        with:
+          event_type: plan_complete
+          status: ${{ job.status }}
+          environment: all
+          details_file: plan-summary.md
+          notify_channels: slack,email
+          slack_channel: "#infrastructure-alerts"
+          email_recipients: "infrastructure-team@dollarfunding.com"

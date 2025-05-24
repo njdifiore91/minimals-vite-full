@@ -1,0 +1,338 @@
+# Default values for OCR Service Helm chart.
+# This is a YAML-formatted file.
+
+# Image configuration for the OCR Service
+# Using Python 3.9-slim as the base image as specified in section 8.5.1
+image:
+  repository: dollarfunding
+  name: ocr-service
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  # Base image is Python 3.9-slim with TensorFlow for GPU support
+  # Image built using multi-stage Dockerfile as specified in section 8.5.2
+
+# Number of replicas to deploy
+replicaCount: 1
+
+# Resource requirements for the OCR Service
+# GPU is required for TensorFlow OCR processing as specified in section 0.1.2
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+    # NVIDIA GPU with CUDA support required for TensorFlow
+    nvidia.com/gpu: 1
+  requests:
+    cpu: 1000m
+    memory: 2Gi
+    # NVIDIA GPU with CUDA support required for TensorFlow
+    nvidia.com/gpu: 1
+  # GPU acceleration is mandatory for OCR service performance
+  # as specified in section 0.2.2 (CPU-only processing is excluded)
+
+# Service configuration
+# Defines how the OCR service is exposed within the cluster
+service:
+  type: ClusterIP
+  port: 5000
+  # Port for metrics endpoint for monitoring
+  metricsPort: 9090
+  # Additional service annotations for service discovery
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+
+# Environment variables for the OCR Service
+# Externalized configuration as specified in section 8.2.2
+env:
+  # General configuration
+  - name: LOG_LEVEL
+    value: "INFO"
+  - name: SERVICE_PORT
+    value: "5000"
+  - name: METRICS_PORT
+    value: "9090"
+  - name: APPLICATION_NAME
+    value: "ocr-service"
+  - name: APPLICATION_VERSION
+    value: "1.0.0"
+  
+  # TensorFlow configuration for GPU acceleration
+  - name: TF_FORCE_GPU_ALLOW_GROWTH
+    value: "true"
+  - name: TF_GPU_MEMORY_LIMIT
+    value: "0.8"
+  - name: TF_CPP_MIN_LOG_LEVEL
+    value: "2"
+  - name: CUDA_VISIBLE_DEVICES
+    value: "all"
+  
+  # OCR model configuration for document data extraction
+  - name: MODEL_DIR
+    value: "/models"
+  - name: OCR_CONFIDENCE_THRESHOLD
+    value: "0.99"
+  - name: OCR_BATCH_SIZE
+    value: "8"
+  - name: OCR_MAX_IMAGE_SIZE
+    value: "2048"
+  - name: OCR_ENABLE_HANDWRITTEN
+    value: "true"
+  - name: OCR_ENABLE_TYPED
+    value: "true"
+  
+  # RabbitMQ connection for document processing pipeline
+  # As specified in section 0.2.1.2
+  - name: RABBITMQ_HOST
+    value: "rabbitmq"
+  - name: RABBITMQ_PORT
+    value: "5672"
+  - name: RABBITMQ_EXCHANGE
+    value: "mca.documents"
+  - name: RABBITMQ_QUEUE
+    value: "data-extraction"
+  - name: RABBITMQ_USERNAME
+    valueFrom:
+      secretKeyRef:
+        name: ocr-service-secrets
+        key: rabbitmq.username
+  - name: RABBITMQ_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: ocr-service-secrets
+        key: rabbitmq.password
+  
+  # S3 storage configuration for document access
+  # As specified in section 0.2.5 for S3-compatible storage with AES-256 encryption
+  - name: S3_ENDPOINT
+    value: "s3-storage"
+  - name: S3_BUCKET
+    valueFrom:
+      configMapKeyRef:
+        name: ocr-service-config
+        key: s3.bucket
+  - name: S3_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: ocr-service-secrets
+        key: s3.accessKey
+  - name: S3_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: ocr-service-secrets
+        key: s3.secretKey
+  - name: S3_REGION
+    valueFrom:
+      configMapKeyRef:
+        name: ocr-service-config
+        key: s3.region
+  - name: S3_USE_SSL
+    value: "true"
+  - name: S3_VERIFY_SSL
+    value: "true"
+  - name: S3_ENCRYPTION
+    value: "AES256"
+
+# Volume mounts for the OCR Service
+# Mount points for persistent storage and temporary files
+volumeMounts:
+  - name: models
+    mountPath: /models
+    readOnly: true
+  - name: temp
+    mountPath: /tmp
+  - name: cache
+    mountPath: /cache
+  - name: config
+    mountPath: /config
+    readOnly: true
+
+# Volumes for the OCR Service
+volumes:
+  - name: models
+    persistentVolumeClaim:
+      claimName: ocr-models-pvc
+  - name: temp
+    emptyDir: {}
+  - name: cache
+    emptyDir:
+      medium: Memory
+      sizeLimit: 1Gi
+  - name: config
+    configMap:
+      name: ocr-service-config
+
+# Persistent Volume Claim for model storage
+persistentVolumeClaim:
+  models:
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    storageClass: standard
+
+# Liveness probe configuration
+# Checks if the service is running and restarts if it's not responding
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 5000
+  initialDelaySeconds: 60  # Allow time for TensorFlow models to load
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+# Readiness probe configuration
+# Checks if the service is ready to receive traffic
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 5000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+# Startup probe configuration
+# Gives the container extra time to initialize during startup
+startupProbe:
+  httpGet:
+    path: /health
+    port: 5000
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 12  # Allow up to 2 minutes (12 * 10s) for startup
+
+# Horizontal Pod Autoscaler configuration
+# Automatically scales the number of pods based on resource utilization
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+  # Custom metrics for GPU utilization
+  customMetrics:
+    - type: Pods
+      pods:
+        metric:
+          name: nvidia_gpu_duty_cycle
+        target:
+          type: AverageValue
+          averageValue: 80
+
+# Node selector for GPU nodes
+nodeSelector:
+  "feature.node.kubernetes.io/pci-10de.present": "true"
+
+# Tolerations for GPU nodes
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+# Security context
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+
+# Environment-specific overrides
+# Development environment
+development:
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+      nvidia.com/gpu: 1
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: 1
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  env:
+    - name: LOG_LEVEL
+      value: "DEBUG"
+    - name: OCR_CONFIDENCE_THRESHOLD
+      value: "0.7"
+
+# Staging environment
+staging:
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+      nvidia.com/gpu: 1
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+      nvidia.com/gpu: 1
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+  env:
+    - name: LOG_LEVEL
+      value: "INFO"
+
+# Production environment
+# Configuration for production deployment with high availability
+production:
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+      nvidia.com/gpu: 2
+    requests:
+      cpu: 2000m
+      memory: 4Gi
+      nvidia.com/gpu: 2
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+  env:
+    - name: LOG_LEVEL
+      value: "WARNING"
+    - name: OCR_BATCH_SIZE
+      value: "16"
+    - name: OCR_CONFIDENCE_THRESHOLD
+      value: "0.99"
+  # Production-specific volume configuration
+  persistentVolumeClaim:
+    models:
+      accessMode: ReadWriteMany
+      size: 20Gi
+      storageClass: premium
+  # Additional production-specific settings
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: "node-role.kubernetes.io/production"
+          operator: "Exists"
+  # Production-specific monitoring settings
+  monitoring:
+    enabled: true
+    scrapeInterval: "15s"
+    # Metrics for OCR accuracy tracking as specified in section 0.2.5
+    metrics:
+      - name: "ocr_accuracy"
+        help: "OCR extraction accuracy percentage"
+        type: "gauge"
+      - name: "ocr_processing_time"
+        help: "Time taken to process documents in milliseconds"
+        type: "histogram"
+      - name: "ocr_document_count"
+        help: "Number of documents processed"
+        type: "counter"

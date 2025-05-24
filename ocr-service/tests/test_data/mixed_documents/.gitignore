@@ -1,0 +1,47 @@
+# OCR Service - Mixed Documents Test Data
+# This .gitignore file prevents binary document files from being committed to the repository
+# to avoid repository bloat while ensuring configuration and documentation files are tracked.
+
+# Exclude all document files by default
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude any large binary files
+*.bin
+*.dat
+
+# Exclude temporary files that might be created during testing
+*.tmp
+*~
+
+# Track README and documentation files
+!README.md
+!DOCUMENT_SOURCES.md
+
+# Track configuration files
+!*.config.json
+!*.metadata.json
+!document_catalog.json
+
+# Track sample document manifests
+!manifest.json
+!document_index.csv
+
+# NOTE TO DEVELOPERS:
+# Test documents should be obtained from the secure document storage at:
+# s3://mca-documents-staging/test-documents/
+#
+# Run the download script from the project root to fetch test documents:
+# ./scripts/fetch_test_documents.sh mixed_documents
+#
+# Contact the OCR team for access credentials if needed.

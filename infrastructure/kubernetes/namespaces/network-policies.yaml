@@ -1,0 +1,491 @@
+# Network Policies for MCA Application Processing System
+# This file defines NetworkPolicy resources to implement network segmentation between service groups
+# It establishes logical network boundaries that limit communication paths to only those explicitly required for operation
+
+apiVersion: v1
+kind: List
+items:
+# API Gateway Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: api-gateway-network-policy
+    namespace: ${ENVIRONMENT}  # Will be replaced with actual environment (development, staging, production)
+    labels:
+      app.kubernetes.io/component: api-gateway
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: api-gateway
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress traffic from external sources (handled by Ingress Controller)
+    - from:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except:
+          - 10.0.0.0/8  # Exclude internal cluster network
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+      ports:
+      - protocol: TCP
+        port: 8000  # Kong API Gateway port
+    egress:
+    # Allow egress to Data Service
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      ports:
+      - protocol: TCP
+        port: 8080  # Data Service port
+    # Allow egress to Notification Service
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: notification-service
+      ports:
+      - protocol: TCP
+        port: 3000  # Notification Service port
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# Data Service Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: data-service-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: data-service
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: data-service
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress from API Gateway
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: 8080  # Data Service port
+    # Allow ingress from RabbitMQ for message processing
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 8080
+    egress:
+    # Allow egress to PostgreSQL
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: postgresql
+      ports:
+      - protocol: TCP
+        port: 5432  # PostgreSQL port
+    # Allow egress to Redis
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: redis
+      ports:
+      - protocol: TCP
+        port: 6379  # Redis port
+    # Allow egress to RabbitMQ
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# Notification Service Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: notification-service-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: notification-service
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: notification-service
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress from API Gateway
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: 3000  # Notification Service port
+    # Allow ingress from RabbitMQ for message processing
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 3000
+    egress:
+    # Allow egress to external webhooks
+    - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except:
+          - 10.0.0.0/8  # Exclude internal cluster network
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS port for webhooks
+    # Allow egress to RabbitMQ
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# Email Service Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: email-service-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: email-service
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: email-service
+    policyTypes:
+    - Egress
+    egress:
+    # Allow egress to RabbitMQ
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+    # Allow egress to external email server (IMAP)
+    - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except:
+          - 10.0.0.0/8  # Exclude internal cluster network
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+      ports:
+      - protocol: TCP
+        port: 993  # IMAP over SSL port
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# Document Service Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: document-service-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: document-service
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: document-service
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress from RabbitMQ for message processing
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 8000  # Document Service port
+    egress:
+    # Allow egress to RabbitMQ
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+    # Allow egress to S3 storage
+    - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0  # S3 endpoint could be external or internal
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS port for S3 API
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# OCR Service Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: ocr-service-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: ocr-service
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: ocr-service
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress from RabbitMQ for message processing
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 8000  # OCR Service port
+    egress:
+    # Allow egress to RabbitMQ
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+    # Allow egress to S3 storage
+    - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0  # S3 endpoint could be external or internal
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS port for S3 API
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# PostgreSQL Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: postgresql-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: database
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: postgresql
+    policyTypes:
+    - Ingress
+    ingress:
+    # Allow ingress from Data Service only
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      ports:
+      - protocol: TCP
+        port: 5432  # PostgreSQL port
+
+# Redis Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: redis-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: cache
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: redis
+    policyTypes:
+    - Ingress
+    ingress:
+    # Allow ingress from Data Service only
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      ports:
+      - protocol: TCP
+        port: 6379  # Redis port
+
+# RabbitMQ Network Policy
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: rabbitmq-network-policy
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: messaging
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: rabbitmq
+    policyTypes:
+    - Ingress
+    - Egress
+    ingress:
+    # Allow ingress from all microservices that need to publish messages
+    - from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: email-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: document-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: ocr-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: notification-service
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+      - protocol: TCP
+        port: 15672  # RabbitMQ management port
+    egress:
+    # Allow egress to all microservices that consume messages
+    - to:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: document-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: ocr-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: notification-service
+      ports:
+      - protocol: TCP
+        port: 8000  # Document and OCR Service port
+      - protocol: TCP
+        port: 8080  # Data Service port
+      - protocol: TCP
+        port: 3000  # Notification Service port
+    # Allow DNS resolution
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+# Default Deny All Network Policy
+# This policy ensures that any traffic not explicitly allowed by other policies is denied
+- apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata:
+    name: default-deny-all
+    namespace: ${ENVIRONMENT}
+    labels:
+      app.kubernetes.io/component: security
+      app.kubernetes.io/part-of: mca-application-system
+  spec:
+    podSelector: {}  # Selects all pods in the namespace
+    policyTypes:
+    - Ingress
+    - Egress
+    # No ingress or egress rules means all traffic is denied by default

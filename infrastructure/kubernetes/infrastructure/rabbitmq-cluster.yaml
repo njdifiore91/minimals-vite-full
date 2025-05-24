@@ -1,0 +1,360 @@
+---
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: mca-rabbitmq
+  namespace: mca-system
+  labels:
+    app.kubernetes.io/part-of: mca-application
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/name: rabbitmq
+spec:
+  replicas: 3  # High availability with 3 nodes
+  image: rabbitmq:3.12-management
+  imagePullSecrets: []
+  service:
+    type: ClusterIP
+    annotations:
+      service.kubernetes.io/topology-aware-routing: "true"
+  persistence:
+    storageClassName: standard
+    storage: "10Gi"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rabbitmq
+          topologyKey: kubernetes.io/hostname
+  rabbitmq:
+    additionalPlugins:
+      - rabbitmq_shovel
+      - rabbitmq_shovel_management
+      - rabbitmq_federation
+      - rabbitmq_federation_management
+      - rabbitmq_consistent_hash_exchange
+    # Enable high availability with mirrored queues
+    additionalConfig: |
+      # Enable message persistence
+      queue.default_durable = true
+      queue.default_lazy = false
+      # Mirrored queues configuration
+      cluster_partition_handling = autoheal
+      # Increase file descriptors for high throughput
+      total_memory_available_override_value = 1.8GB
+      vm_memory_high_watermark_paging_ratio = 0.8
+      # Message TTL and size limits
+      consumer_timeout = 1800000
+      # Logging configuration
+      log.file.level = info
+      # Connection and channel limits
+      channel_max = 2000
+      # Heartbeat timeout
+      heartbeat = 60
+    # Advanced configuration for RabbitMQ
+    advancedConfig: |
+      [
+        {rabbit, [
+          {tcp_listen_options, [
+            {backlog, 1024},
+            {nodelay, true},
+            {linger, {true, 0}},
+            {exit_on_close, false}
+          ]},
+          {collect_statistics_interval, 30000},
+          {mnesia_table_loading_retry_limit, 10},
+          {mnesia_table_loading_retry_timeout, 30000}
+        ]},
+        {ra, [
+          {wal_max_size_bytes, 536870912},
+          {wal_max_batch_size, 4096}
+        ]}
+      ].
+    # Environment variables for RabbitMQ container
+    envConfig: |
+      RABBITMQ_DISTRIBUTION_BUFFER_SIZE=214748364
+      RABBITMQ_MAX_NUMBER_OF_PROCESSES=1048576
+      RABBITMQ_STREAM_REPLICATION_FACTOR=3
+---
+# Policy for high availability with mirrored queues
+apiVersion: rabbitmq.com/v1beta1
+kind: Policy
+metadata:
+  name: ha-policy
+  namespace: mca-system
+spec:
+  name: ha-policy
+  vhost: "/"
+  pattern: ".*"
+  applyTo: "queues"
+  definition:
+    ha-mode: "all"
+    ha-sync-mode: "automatic"
+    ha-sync-batch-size: 50
+    queue-mode: "lazy"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Exchange definition for mca.documents (fanout)
+apiVersion: rabbitmq.com/v1beta1
+kind: Exchange
+metadata:
+  name: mca-documents-exchange
+  namespace: mca-system
+spec:
+  name: "mca.documents"
+  vhost: "/"
+  type: "fanout"
+  autoDelete: false
+  durable: true
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Queue definition for document-processing
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: document-processing-queue
+  namespace: mca-system
+spec:
+  name: "document-processing"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  arguments:
+    x-dead-letter-exchange: "dlx.document-processing"
+    x-dead-letter-routing-key: "failed.document-processing"
+    x-max-length: 100000
+    x-max-length-bytes: 1073741824
+    x-message-ttl: 604800000  # 7 days in milliseconds
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Queue definition for data-extraction
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: data-extraction-queue
+  namespace: mca-system
+spec:
+  name: "data-extraction"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  arguments:
+    x-dead-letter-exchange: "dlx.data-extraction"
+    x-dead-letter-routing-key: "failed.data-extraction"
+    x-max-length: 100000
+    x-max-length-bytes: 1073741824
+    x-message-ttl: 604800000  # 7 days in milliseconds
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Queue definition for notification
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: notification-queue
+  namespace: mca-system
+spec:
+  name: "notification"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  arguments:
+    x-dead-letter-exchange: "dlx.notification"
+    x-dead-letter-routing-key: "failed.notification"
+    x-max-length: 100000
+    x-max-length-bytes: 1073741824
+    x-message-ttl: 604800000  # 7 days in milliseconds
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for document-processing queue to mca.documents exchange
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: document-processing-binding
+  namespace: mca-system
+spec:
+  source: "mca.documents"
+  destination: "document-processing"
+  destinationType: "queue"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for data-extraction queue to mca.documents exchange
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: data-extraction-binding
+  namespace: mca-system
+spec:
+  source: "mca.documents"
+  destination: "data-extraction"
+  destinationType: "queue"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for notification queue to mca.documents exchange
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: notification-binding
+  namespace: mca-system
+spec:
+  source: "mca.documents"
+  destination: "notification"
+  destinationType: "queue"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter exchange for document-processing
+apiVersion: rabbitmq.com/v1beta1
+kind: Exchange
+metadata:
+  name: dlx-document-processing
+  namespace: mca-system
+spec:
+  name: "dlx.document-processing"
+  vhost: "/"
+  type: "direct"
+  autoDelete: false
+  durable: true
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter exchange for data-extraction
+apiVersion: rabbitmq.com/v1beta1
+kind: Exchange
+metadata:
+  name: dlx-data-extraction
+  namespace: mca-system
+spec:
+  name: "dlx.data-extraction"
+  vhost: "/"
+  type: "direct"
+  autoDelete: false
+  durable: true
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter exchange for notification
+apiVersion: rabbitmq.com/v1beta1
+kind: Exchange
+metadata:
+  name: dlx-notification
+  namespace: mca-system
+spec:
+  name: "dlx.notification"
+  vhost: "/"
+  type: "direct"
+  autoDelete: false
+  durable: true
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter queue for document-processing
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: dlq-document-processing
+  namespace: mca-system
+spec:
+  name: "dlq.document-processing"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter queue for data-extraction
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: dlq-data-extraction
+  namespace: mca-system
+spec:
+  name: "dlq.data-extraction"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Dead letter queue for notification
+apiVersion: rabbitmq.com/v1beta1
+kind: Queue
+metadata:
+  name: dlq-notification
+  namespace: mca-system
+spec:
+  name: "dlq.notification"
+  vhost: "/"
+  type: "quorum"
+  durable: true
+  autoDelete: false
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for dead letter queue document-processing
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: dlq-document-processing-binding
+  namespace: mca-system
+spec:
+  source: "dlx.document-processing"
+  destination: "dlq.document-processing"
+  destinationType: "queue"
+  routingKey: "failed.document-processing"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for dead letter queue data-extraction
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: dlq-data-extraction-binding
+  namespace: mca-system
+spec:
+  source: "dlx.data-extraction"
+  destination: "dlq.data-extraction"
+  destinationType: "queue"
+  routingKey: "failed.data-extraction"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq
+---
+# Binding for dead letter queue notification
+apiVersion: rabbitmq.com/v1beta1
+kind: Binding
+metadata:
+  name: dlq-notification-binding
+  namespace: mca-system
+spec:
+  source: "dlx.notification"
+  destination: "dlq.notification"
+  destinationType: "queue"
+  routingKey: "failed.notification"
+  vhost: "/"
+  rabbitmqClusterReference:
+    name: mca-rabbitmq

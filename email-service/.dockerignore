@@ -1,0 +1,56 @@
+# Node.js dependencies and package management
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.npm
+.pnpm-store
+
+# Environment and configuration files
+.env
+.env.*
+.npmrc
+.aws
+
+# Git files
+.git
+.gitignore
+.github
+
+# Test files and coverage reports
+test
+tests
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# IDE and editor files
+.vscode
+.idea
+.editorconfig
+*.swp
+*.swo
+
+# Build artifacts and temporary files
+dist
+build
+tmp
+*.log
+
+# Docker files
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation and non-essential files
+README.md
+LICENSE
+docs
+
+# TypeScript specific
+tsconfig.tsbuildinfo
+
+# Miscellaneous
+.DS_Store
+Thumbs.db

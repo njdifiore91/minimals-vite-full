@@ -1,0 +1,145 @@
+{{- /*
+Service template for Kong API Gateway
+This template creates Kubernetes Service resources to expose Kong's proxy and admin ports.
+
+The template creates three services:
+1. Proxy Service: Exposes ports 80/443 for HTTP/HTTPS traffic
+2. Admin Service: Exposes ports 8001/8444 for internal management (restricted to cluster)
+3. Status Service: Exposes port 8100 for health checks and monitoring (restricted to cluster)
+*/}}
+
+{{- if .Values.service.enabled -}}
+---
+# Service for Kong Proxy - handles all API traffic
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kong.fullname" . }}-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  annotations:
+    {{- if .Values.service.annotations }}
+    {{- toYaml .Values.service.annotations | nindent 4 }}
+    {{- end }}
+    {{- if eq .Values.service.type "LoadBalancer" }}
+    # Cloud provider-specific annotations
+    {{- if .Values.service.loadBalancerAnnotations }}
+    {{- toYaml .Values.service.loadBalancerAnnotations | nindent 4 }}
+    {{- end }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.service.internalTrafficPolicy }}
+  internalTrafficPolicy: {{ .Values.service.internalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml .Values.service.sessionAffinityConfig | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  ports:
+  - name: http
+    port: {{ .Values.service.http.port | default 80 }}
+    targetPort: {{ .Values.service.http.targetPort | default 8000 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.http.nodePort }}
+    nodePort: {{ .Values.service.http.nodePort }}
+    {{- end }}
+  - name: https
+    port: {{ .Values.service.https.port | default 443 }}
+    targetPort: {{ .Values.service.https.targetPort | default 8443 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.https.nodePort }}
+    nodePort: {{ .Values.service.https.nodePort }}
+    {{- end }}
+  {{- if .Values.service.extraPorts }}
+  {{- toYaml .Values.service.extraPorts | nindent 2 }}
+  {{- end }}
+  selector:
+    {{- include "kong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+    
+  {{- with .Values.service.externalIPs }}
+  # External IPs associated with the service
+  externalIPs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.admin.enabled -}}
+---
+# Service for Kong Admin API - internal management interface
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kong.fullname" . }}-admin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin
+  annotations:
+    # Admin API should not be exposed externally
+    konghq.com/internal-service: "true"
+    {{- if .Values.admin.annotations }}
+    {{- toYaml .Values.admin.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  # Admin API is always ClusterIP to restrict external access
+  type: ClusterIP
+  ports:
+  - name: http-admin
+    port: {{ .Values.admin.http.port | default 8001 }}
+    targetPort: {{ .Values.admin.http.targetPort | default 8001 }}
+    protocol: TCP
+  - name: https-admin
+    port: {{ .Values.admin.https.port | default 8444 }}
+    targetPort: {{ .Values.admin.https.targetPort | default 8444 }}
+    protocol: TCP
+  selector:
+    {{- include "kong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: status
+{{- end }}
+
+{{- if .Values.status.enabled -}}
+---
+# Service for Kong Status API - health checks and monitoring
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kong.fullname" . }}-status
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: status
+  annotations:
+    # Status API should not be exposed externally
+    konghq.com/internal-service: "true"
+    {{- if .Values.status.annotations }}
+    {{- toYaml .Values.status.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  # Status API is always ClusterIP to restrict external access
+  type: ClusterIP
+  ports:
+  - name: http-status
+    port: {{ .Values.status.http.port | default 8100 }}
+    targetPort: {{ .Values.status.http.targetPort | default 8100 }}
+    protocol: TCP
+  selector:
+    {{- include "kong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admin
+{{- end }}

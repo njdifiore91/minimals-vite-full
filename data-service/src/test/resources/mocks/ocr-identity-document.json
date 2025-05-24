@@ -1,0 +1,303 @@
+{
+  "documentId": "id-doc-20240522-001",
+  "documentType": "identity_document",
+  "documentSubType": "drivers_license",
+  "processingTimestamp": "2024-05-22T14:30:45.123Z",
+  "processingDuration": 1.245,
+  "ocrEngine": "TensorFlow v2.9.1",
+  "overallConfidence": 0.97,
+  "documentMetadata": {
+    "pageCount": 1,
+    "imageQuality": "high",
+    "imageResolution": "300dpi",
+    "colorMode": "color",
+    "fileSize": 1245678,
+    "fileFormat": "pdf",
+    "s3Path": "mca-documents-staging/identity/id-doc-20240522-001.pdf",
+    "md5Hash": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+  },
+  "extractedFields": {
+    "personalInformation": {
+      "fullName": {
+        "value": "John Robert Smith",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 120,
+          "y": 150,
+          "width": 200,
+          "height": 25
+        }
+      },
+      "firstName": {
+        "value": "John",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 120,
+          "y": 150,
+          "width": 60,
+          "height": 25
+        }
+      },
+      "middleName": {
+        "value": "Robert",
+        "confidence": 0.98,
+        "boundingBox": {
+          "x": 185,
+          "y": 150,
+          "width": 70,
+          "height": 25
+        }
+      },
+      "lastName": {
+        "value": "Smith",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 260,
+          "y": 150,
+          "width": 60,
+          "height": 25
+        }
+      },
+      "dateOfBirth": {
+        "value": "1985-06-15",
+        "confidence": 0.97,
+        "boundingBox": {
+          "x": 120,
+          "y": 190,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "gender": {
+        "value": "M",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 120,
+          "y": 230,
+          "width": 20,
+          "height": 25
+        }
+      },
+      "address": {
+        "value": "123 Main Street, Apt 4B, Springfield, IL 62701",
+        "confidence": 0.95,
+        "boundingBox": {
+          "x": 120,
+          "y": 270,
+          "width": 350,
+          "height": 25
+        }
+      },
+      "streetAddress": {
+        "value": "123 Main Street, Apt 4B",
+        "confidence": 0.96,
+        "boundingBox": {
+          "x": 120,
+          "y": 270,
+          "width": 200,
+          "height": 25
+        }
+      },
+      "city": {
+        "value": "Springfield",
+        "confidence": 0.98,
+        "boundingBox": {
+          "x": 325,
+          "y": 270,
+          "width": 80,
+          "height": 25
+        }
+      },
+      "state": {
+        "value": "IL",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 410,
+          "y": 270,
+          "width": 20,
+          "height": 25
+        }
+      },
+      "zipCode": {
+        "value": "62701",
+        "confidence": 0.98,
+        "boundingBox": {
+          "x": 435,
+          "y": 270,
+          "width": 50,
+          "height": 25
+        }
+      },
+      "height": {
+        "value": "5'11\"",
+        "confidence": 0.96,
+        "boundingBox": {
+          "x": 120,
+          "y": 310,
+          "width": 50,
+          "height": 25
+        }
+      },
+      "eyeColor": {
+        "value": "BRN",
+        "confidence": 0.97,
+        "boundingBox": {
+          "x": 180,
+          "y": 310,
+          "width": 40,
+          "height": 25
+        }
+      },
+      "hairColor": {
+        "value": "BRN",
+        "confidence": 0.97,
+        "boundingBox": {
+          "x": 230,
+          "y": 310,
+          "width": 40,
+          "height": 25
+        }
+      }
+    },
+    "documentInformation": {
+      "documentNumber": {
+        "value": "DL1234567890",
+        "confidence": 0.98,
+        "boundingBox": {
+          "x": 120,
+          "y": 350,
+          "width": 150,
+          "height": 25
+        }
+      },
+      "documentClass": {
+        "value": "D",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 120,
+          "y": 390,
+          "width": 20,
+          "height": 25
+        }
+      },
+      "issueDate": {
+        "value": "2020-08-12",
+        "confidence": 0.97,
+        "boundingBox": {
+          "x": 120,
+          "y": 430,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "expirationDate": {
+        "value": "2028-06-15",
+        "confidence": 0.96,
+        "boundingBox": {
+          "x": 120,
+          "y": 470,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "issuingAuthority": {
+        "value": "Illinois Secretary of State",
+        "confidence": 0.95,
+        "boundingBox": {
+          "x": 120,
+          "y": 510,
+          "width": 250,
+          "height": 25
+        }
+      },
+      "issuingState": {
+        "value": "IL",
+        "confidence": 0.99,
+        "boundingBox": {
+          "x": 120,
+          "y": 550,
+          "width": 20,
+          "height": 25
+        }
+      },
+      "restrictions": {
+        "value": "B",
+        "confidence": 0.94,
+        "boundingBox": {
+          "x": 120,
+          "y": 590,
+          "width": 20,
+          "height": 25
+        }
+      },
+      "endorsements": {
+        "value": "NONE",
+        "confidence": 0.93,
+        "boundingBox": {
+          "x": 120,
+          "y": 630,
+          "width": 50,
+          "height": 25
+        }
+      }
+    },
+    "securityFeatures": {
+      "barcodeData": {
+        "value": "@\n\nANSI 636014040002DL00410278ZI03170049DLDAQA\nDCSDRIVERS LICENSE\nDDEN\nDACJOHN\nDDFN\nDADROBERT\nDDGN\nDACSMITH\nDDEN\nDBD06152028\nDBB06151985\nDBA08122020\nDBC1\nDAU511\nDAYBRN\nDAZBRN\nDCF1234567890\nDCGUSA\nDCHN\nDAI123 MAIN STREET, APT 4B\nDAJSPRINGFIELD\nDAKIL\nDAL62701-1234\nDCK1234567890123456\nDDAF\nDDB06152012\nDDC06152012\nDDD1",
+        "confidence": 0.92,
+        "boundingBox": {
+          "x": 50,
+          "y": 700,
+          "width": 400,
+          "height": 100
+        }
+      },
+      "hologramDetected": {
+        "value": true,
+        "confidence": 0.85,
+        "boundingBox": {
+          "x": 200,
+          "y": 150,
+          "width": 300,
+          "height": 200
+        }
+      },
+      "microPrintDetected": {
+        "value": true,
+        "confidence": 0.82,
+        "boundingBox": {
+          "x": 100,
+          "y": 400,
+          "width": 400,
+          "height": 50
+        }
+      },
+      "ultravioletFeaturesDetected": {
+        "value": false,
+        "confidence": 0.75,
+        "boundingBox": null
+      }
+    }
+  },
+  "lowConfidenceFields": [
+    {
+      "fieldPath": "extractedFields.securityFeatures.ultravioletFeaturesDetected",
+      "confidence": 0.75,
+      "reason": "Feature detection below threshold"
+    },
+    {
+      "fieldPath": "extractedFields.securityFeatures.microPrintDetected",
+      "confidence": 0.82,
+      "reason": "Image resolution insufficient for reliable detection"
+    }
+  ],
+  "validationResults": {
+    "documentExpired": false,
+    "documentValid": true,
+    "securityFeaturesValid": true,
+    "dataConsistencyValid": true,
+    "warnings": [
+      "Some security features could not be verified with high confidence"
+    ]
+  }
+}

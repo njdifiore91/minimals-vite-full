@@ -1,0 +1,77 @@
+# Service definition for RabbitMQ cluster
+# This file defines two services:
+# 1. A headless service for StatefulSet DNS resolution
+# 2. A client service for application access to RabbitMQ
+
+# Headless service for StatefulSet DNS resolution
+# This enables pods to discover each other by hostname for clustering
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}-headless
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    service.kubernetes.io/name: rabbitmq
+  annotations:
+    # This is a headless service for StatefulSet DNS resolution
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None # Headless service
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+      protocol: TCP
+  selector:
+    {{- include "rabbitmq.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+---
+# Client service for application access to RabbitMQ
+# This service exposes AMQP, management UI, and metrics ports
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    service.kubernetes.io/name: rabbitmq
+  annotations:
+    # Annotations for service discovery and monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "15692"
+    {{- if .Values.service.annotations }}
+    {{- include "rabbitmq.tplValue" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+      protocol: TCP
+      {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.amqp }}
+      nodePort: {{ .Values.service.nodePorts.amqp }}
+      {{- end }}
+    - name: management
+      port: 15672
+      targetPort: management
+      protocol: TCP
+      {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.management }}
+      nodePort: {{ .Values.service.nodePorts.management }}
+      {{- end }}
+    - name: metrics
+      port: 15692
+      targetPort: metrics
+      protocol: TCP
+      {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.metrics }}
+      nodePort: {{ .Values.service.nodePorts.metrics }}
+      {{- end }}
+  selector:
+    {{- include "rabbitmq.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq

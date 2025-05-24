@@ -1,0 +1,269 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
+spec:
+  serviceName: {{ include "rabbitmq.fullname" . }}-headless
+  # Minimum 3 nodes for high availability
+  replicas: {{ .Values.replicaCount | default 3 }}
+  selector:
+    matchLabels:
+      {{- include "rabbitmq.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rabbitmq.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "15692"
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "rabbitmq.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Pod anti-affinity to distribute nodes across availability zones
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - {{ include "rabbitmq.name" . }}
+              topologyKey: topology.kubernetes.io/zone
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                - {{ include "rabbitmq.name" . }}
+            topologyKey: kubernetes.io/hostname
+        {{- with .Values.nodeAffinity }}
+        nodeAffinity:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      # Allow time for graceful shutdown and leader election
+      terminationGracePeriodSeconds: 180
+      # Init container to set system limits for RabbitMQ
+      initContainers:
+        - name: setup-limits
+          image: busybox:1.34
+          command: ['sh', '-c', 'ulimit -n 65536; sysctl -w vm.max_map_count=262144']
+          securityContext:
+            privileged: true
+        - name: copy-rabbitmq-config
+          image: busybox:1.34
+          command: ['sh', '-c', 'cp /configmap/* /config/ && chmod 644 /config/*']
+          volumeMounts:
+            - name: configmap
+              mountPath: /configmap
+            - name: config
+              mountPath: /config
+      containers:
+      - name: rabbitmq
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        command:
+          - bash
+          - -ec
+          - |
+            # Configure RabbitMQ for clustering
+            mkdir -p /var/lib/rabbitmq
+
+            # Set Erlang cookie for cluster authentication
+            echo $RABBITMQ_ERLANG_COOKIE > /var/lib/rabbitmq/.erlang.cookie
+            chmod 600 /var/lib/rabbitmq/.erlang.cookie
+            
+            # Wait for DNS resolution to be available
+            until nslookup {{ include "rabbitmq.fullname" . }}-0.{{ include "rabbitmq.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local; do
+              echo "Waiting for DNS resolution of {{ include "rabbitmq.fullname" . }}-0.{{ include "rabbitmq.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local";
+              sleep 2;
+            done
+            
+            # Configure mirrored queues for data durability
+            cat > /tmp/rabbit-ha-init.sh << 'EOF'
+            #!/bin/sh
+            
+            # Wait for RabbitMQ to start
+            sleep 30
+            
+            # Set policy for mirrored queues with auto-sync
+            rabbitmqctl set_policy ha-all ".*" '{"ha-mode":"all", "ha-sync-mode":"automatic"}' --priority 1 --apply-to queues
+            
+            # Set policy for lazy queues to optimize memory usage
+            rabbitmqctl set_policy lazy-queue ".*" '{"queue-mode":"lazy"}' --priority 2 --apply-to queues
+            EOF
+            
+            chmod +x /tmp/rabbit-ha-init.sh
+            /tmp/rabbit-ha-init.sh &
+            
+            # Start RabbitMQ server
+            exec rabbitmq-server
+        env:
+          - name: RABBITMQ_NODENAME
+            value: rabbit@$(POD_NAME).{{ include "rabbitmq.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: RABBITMQ_USE_LONGNAME
+            value: "true"
+          - name: RABBITMQ_ERLANG_COOKIE
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "rabbitmq.fullname" . }}
+                key: erlang-cookie
+          - name: RABBITMQ_DEFAULT_USER
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "rabbitmq.fullname" . }}
+                key: rabbitmq-username
+          - name: RABBITMQ_DEFAULT_PASS
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "rabbitmq.fullname" . }}
+                key: rabbitmq-password
+          - name: RABBITMQ_ENABLED_PLUGINS_FILE
+            value: /etc/rabbitmq/enabled_plugins
+          - name: RABBITMQ_CONFIG_FILE
+            value: /etc/rabbitmq/rabbitmq
+          # Enable Prometheus metrics export
+          - name: RABBITMQ_PROMETHEUS_METRICS
+            value: "true"
+          # Enable TLS 1.3 for secure connections
+          {{- if .Values.tls.enabled }}
+          - name: RABBITMQ_SSL_CACERTFILE
+            value: /etc/rabbitmq/tls/ca.crt
+          - name: RABBITMQ_SSL_CERTFILE
+            value: /etc/rabbitmq/tls/tls.crt
+          - name: RABBITMQ_SSL_KEYFILE
+            value: /etc/rabbitmq/tls/tls.key
+          - name: RABBITMQ_SSL_VERIFY
+            value: "verify_peer"
+          - name: RABBITMQ_SSL_FAIL_IF_NO_PEER_CERT
+            value: "false"
+          {{- end }}
+        ports:
+          - name: amqp
+            containerPort: 5672
+            protocol: TCP
+          {{- if .Values.tls.enabled }}
+          - name: amqps
+            containerPort: 5671
+            protocol: TCP
+          {{- end }}
+          - name: management
+            containerPort: 15672
+            protocol: TCP
+          - name: epmd
+            containerPort: 4369
+            protocol: TCP
+          - name: metrics
+            containerPort: 15692
+            protocol: TCP
+        # Liveness probe to check if RabbitMQ is running
+        livenessProbe:
+          exec:
+            command:
+              - rabbitmq-diagnostics
+              - status
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 15
+          successThreshold: 1
+          failureThreshold: 3
+        # Readiness probe to check if RabbitMQ is ready to accept connections
+        readinessProbe:
+          exec:
+            command:
+              - rabbitmq-diagnostics
+              - check_port_connectivity
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        # Startup probe to give RabbitMQ time to initialize
+        startupProbe:
+          exec:
+            command:
+              - rabbitmq-diagnostics
+              - ping
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 30
+          successThreshold: 1
+        # Resource requests and limits
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+          # Mount for RabbitMQ data (durable queues)
+          - name: data
+            mountPath: /var/lib/rabbitmq/mnesia
+          # Mount for RabbitMQ configuration
+          - name: config
+            mountPath: /etc/rabbitmq/rabbitmq.conf
+            subPath: rabbitmq.conf
+          # Mount for RabbitMQ enabled plugins
+          - name: config
+            mountPath: /etc/rabbitmq/enabled_plugins
+            subPath: enabled_plugins
+          # Mount for RabbitMQ definitions (exchanges, queues, etc.)
+          - name: config
+            mountPath: /etc/rabbitmq/definitions.json
+            subPath: definitions.json
+          {{- if .Values.tls.enabled }}
+          # Mount for TLS certificates
+          - name: tls
+            mountPath: /etc/rabbitmq/tls
+          {{- end }}
+      volumes:
+        # ConfigMap volume for RabbitMQ configuration
+        - name: configmap
+          configMap:
+            name: {{ include "rabbitmq.fullname" . }}
+            defaultMode: 0644
+        # Empty directory for config files
+        - name: config
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        # Secret volume for TLS certificates
+        - name: tls
+          secret:
+            secretName: {{ include "rabbitmq.fullname" . }}-tls
+            defaultMode: 0400
+        {{- end }}
+  # Persistent volume claims for durable message storage
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "rabbitmq.labels" . | nindent 10 }}
+        annotations:
+          {{- if .Values.persistence.annotations }}
+          {{- toYaml .Values.persistence.annotations | nindent 10 }}
+          {{- end }}
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | default "10Gi" }}

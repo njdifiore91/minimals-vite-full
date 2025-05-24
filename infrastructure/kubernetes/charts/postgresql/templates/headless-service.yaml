@@ -1,0 +1,56 @@
+{{- /*
+PostgreSQL Headless Service for Merchant Cash Advance Application Processing System
+
+This headless service (clusterIP: None) enables direct DNS resolution to individual PostgreSQL pods
+in the StatefulSet. It's essential for StatefulSet DNS-based discovery, allowing replicas to find
+the primary instance and enabling proper replication setup.
+
+The service provides stable network identities in the form of:
+  <pod-name>.<service-name>.<namespace>.svc.cluster.local
+
+This enables PostgreSQL replicas to connect to the primary instance using a stable DNS name:
+  <statefulset-name>-0.<service-name>.<namespace>.svc.cluster.local
+*/ -}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "postgresql.fullname" . }}-headless
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  annotations:
+    # Explicitly mark as headless service
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+    # Add description for clarity
+    kubernetes.io/description: "Headless service for PostgreSQL StatefulSet DNS-based discovery"
+    # Add prometheus annotations for service monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9187"
+    {{- with .Values.headlessService.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # Setting clusterIP to None makes this a headless service
+  clusterIP: None
+  # Use the same selector as the StatefulSet to target all PostgreSQL pods
+  selector:
+    {{- include "postgresql.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  # Define ports for PostgreSQL access
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+    # Include metrics port for monitoring
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+      protocol: TCP
+  # Enable publishing of not-ready addresses for StatefulSet discovery
+  publishNotReadyAddresses: true
+  # Set session affinity to None for headless service
+  sessionAffinity: None
+  # Set type to ClusterIP (default for headless services)
+  type: ClusterIP

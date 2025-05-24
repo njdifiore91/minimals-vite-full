@@ -1,0 +1,106 @@
+# Python bytecode and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Environment variables and local configuration
+.env
+*.env
+*.local
+.local
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# TensorFlow model files and checkpoints
+*.h5
+*.pb
+*.ckpt
+*.ckpt.*
+checkpoint
+model_checkpoints/
+saved_models/
+
+# Large data files and datasets
+*.csv
+*.json
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.pickle
+*.pkl
+*.npy
+*.npz
+data/
+datasets/
+
+# Exclude large model files from version control
+models/*.h5
+models/*.pb
+models/*.ckpt*
+models/saved_model/
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+tmp/
+temp/
+
+# CUDA and GPU-related files
+.nv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Documentation build
+docs/_build/
+
+# Sensitive configuration
+config/secrets.yaml
+config/credentials.json
+config/*.key
+
+# Ignore all local configuration files except example ones
+config/*.yaml
+!config/*.example.yaml
+
+# Ignore profiling data
+profile_results/
+*.prof
+
+# Ignore generated test data
+tests/test_data/generated/
+
+# Ignore OCR output files in development
+ocr_output/
+extracted_data/

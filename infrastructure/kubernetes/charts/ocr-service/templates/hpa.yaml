@@ -1,0 +1,172 @@
+{{- /*
+OCR Service HorizontalPodAutoscaler Template
+
+This template extends the common HPA template with OCR Service specific configurations.
+It includes settings for CPU and memory-based scaling metrics, with appropriate thresholds
+and scaling behavior optimized for GPU workloads.
+
+Key features:
+- Configures CPU and memory-based scaling metrics with appropriate thresholds
+- Sets minimum and maximum replicas based on environment and GPU availability
+- Implements proper scaling behavior with stabilization windows optimized for GPU workloads
+- Adds annotations for monitoring and observability
+- Considers GPU resource constraints when scaling
+
+This HPA is specifically designed for the OCR Service which uses TensorFlow with GPU
+acceleration for document processing. The scaling parameters are tuned to consider:
+1. The high resource cost of starting new GPU-enabled pods
+2. The need to maintain high availability for the OCR processing pipeline
+3. The 5-minute processing SLA mentioned in section 0.2.6
+4. Different scaling requirements across environments (dev/staging/production)
+*/}}
+
+{{- /* Define OCR Service specific values before including the common template */}}
+
+{{- /* Configure environment-specific scaling parameters */}}
+{{- if eq .Release.Namespace "production" }}
+  {{- /* Production environment needs higher minimum replicas for high availability */}}
+  {{- if not .Values.autoscaling.minReplicas }}
+    {{- $_ := set .Values.autoscaling "minReplicas" 2 }}
+  {{- end }}
+  {{- /* Allow scaling up to 10 replicas in production to handle high load */}}
+  {{- if not .Values.autoscaling.maxReplicas }}
+    {{- $_ := set .Values.autoscaling "maxReplicas" 10 }}
+  {{- end }}
+  {{- /* More aggressive CPU threshold in production for faster scaling */}}
+  {{- if not .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- $_ := set .Values.autoscaling "targetCPUUtilizationPercentage" 70 }}
+  {{- end }}
+{{- else if eq .Release.Namespace "staging" }}
+  {{- /* Staging can start with 1 replica to save GPU resources */}}
+  {{- if not .Values.autoscaling.minReplicas }}
+    {{- $_ := set .Values.autoscaling "minReplicas" 1 }}
+  {{- end }}
+  {{- /* Moderate max replicas for staging environment */}}
+  {{- if not .Values.autoscaling.maxReplicas }}
+    {{- $_ := set .Values.autoscaling "maxReplicas" 5 }}
+  {{- end }}
+  {{- /* Moderate CPU threshold for staging */}}
+  {{- if not .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- $_ := set .Values.autoscaling "targetCPUUtilizationPercentage" 75 }}
+  {{- end }}
+{{- else }}
+  {{- /* Development environment uses minimal resources */}}
+  {{- if not .Values.autoscaling.minReplicas }}
+    {{- $_ := set .Values.autoscaling "minReplicas" 1 }}
+  {{- end }}
+  {{- /* Limited scaling in development to conserve GPU resources */}}
+  {{- if not .Values.autoscaling.maxReplicas }}
+    {{- $_ := set .Values.autoscaling "maxReplicas" 3 }}
+  {{- end }}
+  {{- /* Higher CPU threshold in development to prevent unnecessary scaling */}}
+  {{- if not .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- $_ := set .Values.autoscaling "targetCPUUtilizationPercentage" 80 }}
+  {{- end }}
+{{- end }}
+
+{{- /* Enable memory metric by default for OCR Service - critical for TensorFlow workloads */}}
+{{- if not .Values.autoscaling.includeMemoryMetric }}
+  {{- $_ := set .Values.autoscaling "includeMemoryMetric" true }}
+{{- end }}
+{{- if not .Values.autoscaling.targetMemoryUtilizationPercentage }}
+  {{- /* Memory threshold set to 75% to prevent OOM issues with TensorFlow */}}
+  {{- $_ := set .Values.autoscaling "targetMemoryUtilizationPercentage" 75 }}
+{{- end }}
+
+{{- /* Configure custom GPU utilization metric if available */}}
+{{- if .Values.autoscaling.enableGpuMetric }}
+  {{- if not .Values.autoscaling.customMetrics }}
+    {{- $_ := set .Values.autoscaling "customMetrics" (list 
+      (dict 
+        "type" "Pods"
+        "pods" (dict 
+          "metric" (dict "name" "gpu_utilization")
+          "target" (dict "type" "AverageValue" "averageValue" "60")
+        )
+      )
+    ) }}
+  {{- end }}
+{{- end }}
+
+{{- /* Configure GPU-optimized scaling behavior */}}
+{{- if not .Values.autoscaling.behavior }}
+  {{- $_ := set .Values.autoscaling "behavior" (dict 
+    "scaleDown" (dict 
+      /* Longer stabilization window for scale down to prevent thrashing with GPU resources */
+      "stabilizationWindowSeconds" 600 
+      "policies" (list 
+        /* Conservative percentage-based scale down to prevent rapid resource changes */
+        (dict "type" "Percent" "value" 10 "periodSeconds" 120) 
+        /* Never scale down more than 1 GPU pod at a time to maintain processing capacity */
+        (dict "type" "Pods" "value" 1 "periodSeconds" 180)
+      )
+      /* Use the more conservative policy to prevent aggressive scale down */
+      "selectPolicy" "Min"
+    )
+    "scaleUp" (dict 
+      /* Shorter stabilization window for scale up to meet the 5-minute processing SLA */
+      "stabilizationWindowSeconds" 60 
+      "policies" (list 
+        /* Moderate percentage-based scale up to respond to load increases */
+        (dict "type" "Percent" "value" 50 "periodSeconds" 60) 
+        /* Limit to adding 2 GPU pods at once to prevent resource contention */
+        (dict "type" "Pods" "value" 2 "periodSeconds" 60)
+      )
+      /* Use the more aggressive policy to ensure timely scaling */
+      "selectPolicy" "Max"
+    )
+  ) }}
+{{- end }}
+
+{{- /* Add OCR Service specific annotations for monitoring and observability */}}
+{{- if not .Values.autoscaling.annotations }}
+  {{- $_ := set .Values.autoscaling "annotations" (dict 
+    /* Mark as GPU workload for monitoring dashboards */
+    "monitoring.dollarfunding.com/gpu-workload" "true"
+    /* Use conservative scaling profile for GPU resources */
+    "monitoring.dollarfunding.com/scaling-profile" "gpu-conservative"
+    /* Set minimum scale interval to prevent thrashing */
+    "monitoring.dollarfunding.com/min-scale-interval" "5m"
+    /* Add OCR-specific monitoring tags */
+    "monitoring.dollarfunding.com/service-type" "ocr"
+    "monitoring.dollarfunding.com/sla" "5m"
+    /* Add datadog monitoring annotations if enabled */
+    "ad.datadoghq.com/hpa.check_names" "[\"kubernetes_state\"]"
+    "ad.datadoghq.com/hpa.init_configs" "[{}]"
+    "ad.datadoghq.com/hpa.instances" "[{\"kube_state_metadata_tags\": true}]"
+  ) }}
+{{- end }}
+
+{{- /* Set additional labels for the HPA */}}
+{{- if not .Values.autoscaling.labels }}
+  {{- $_ := set .Values.autoscaling "labels" (dict 
+    "app.kubernetes.io/component" "ocr-service"
+    "app.kubernetes.io/part-of" "mca-application-processing"
+    "dollarfunding.com/gpu-enabled" "true"
+    "dollarfunding.com/critical-path" "true"
+  ) }}
+{{- end }}
+
+{{- /* Include the common HPA template with OCR-specific values */}}
+{{- template "common.hpa" . }}
+
+{{- /* Add a comment to explain the HPA configuration */}}
+{{- /*
+This HPA configuration is optimized for the OCR Service which uses GPU resources.
+It implements a conservative scaling approach to prevent thrashing of GPU resources
+while still meeting the 5-minute processing SLA requirement.
+
+Key scaling parameters:
+- Production: 2-10 replicas, 70% CPU threshold, 75% memory threshold
+- Staging: 1-5 replicas, 75% CPU threshold, 75% memory threshold
+- Development: 1-3 replicas, 80% CPU threshold, 75% memory threshold
+
+Scaling behavior:
+- Scale down: 10% or 1 pod every 3 minutes, 10-minute stabilization window
+- Scale up: 50% or 2 pods every minute, 1-minute stabilization window
+
+GPU considerations:
+- Custom GPU utilization metric when available
+- Conservative scale-down to prevent GPU resource waste
+- Faster scale-up to maintain processing SLA
+*/}}

@@ -1,0 +1,836 @@
+{
+  "manifest_version": "1.0.0",
+  "description": "Manifest of sample handwritten documents for OCR testing",
+  "last_updated": "2023-05-25",
+  "document_categories": [
+    "application_forms",
+    "financial_documents",
+    "notes",
+    "signatures",
+    "identity_documents"
+  ],
+  "quality_levels": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "handwriting_styles": [
+    "cursive",
+    "print",
+    "mixed",
+    "block_letters",
+    "calligraphy"
+  ],
+  "documents": [
+    {
+      "id": "hw_app_form_001",
+      "filename": "mca_application_handwritten.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "print",
+        "legibility": "high",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Global Ventures LLC",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "dba_name",
+            "expected_value": "Global Business Solutions",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "ein",
+            "expected_value": "45-6789012",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "business_address",
+            "expected_value": "789 Enterprise Way, Suite 300, Commerce City, NY 10001",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
+            "expected_confidence": 0.88
+          },
+          {
+            "name": "business_phone",
+            "expected_value": "(555) 987-6543",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 350},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "business_email",
+            "expected_value": "info@globalventures.com",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 400},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$300,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "business_start_date",
+            "expected_value": "03/15/2018",
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 425, "right": 300},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "owner_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "owner_ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 2, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "owner_address",
+            "expected_value": "123 Maple Drive, Commerce City, NY 10001",
+            "position": {"page": 2, "top": 210, "left": 200, "bottom": 235, "right": 500},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "owner_phone",
+            "expected_value": "(555) 123-4567",
+            "position": {"page": 2, "top": 240, "left": 200, "bottom": 265, "right": 350},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "owner_email",
+            "expected_value": "sarah.williams@globalventures.com",
+            "position": {"page": 2, "top": 270, "left": 200, "bottom": 295, "right": 450},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "business_type",
+            "expected_value": "LLC",
+            "position": {"page": 2, "top": 300, "left": 200, "bottom": 325, "right": 350},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "industry",
+            "expected_value": "Retail",
+            "position": {"page": 2, "top": 330, "left": 200, "bottom": 355, "right": 350},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "annual_revenue",
+            "expected_value": "$1,750,000.00",
+            "position": {"page": 2, "top": 360, "left": 200, "bottom": 385, "right": 350},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "date_signed",
+            "expected_value": "05/15/2023",
+            "position": {"page": 3, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.92
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.88,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "First Metro Bank", "XXXX7890", "$67,890.12"],
+              ["Savings", "First Metro Bank", "XXXX4321", "$145,678.90"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_fin_doc_001",
+      "filename": "personal_financial_statement.pdf",
+      "category": "financial_documents",
+      "document_type": "financial_statement",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 2,
+      "characteristics": {
+        "resolution": "240dpi",
+        "handwriting_style": "mixed",
+        "legibility": "medium",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "applicant_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.88
+          },
+          {
+            "name": "applicant_ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.86
+          },
+          {
+            "name": "statement_date",
+            "expected_value": "05/01/2023",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "total_assets",
+            "expected_value": "$2,345,000.00",
+            "position": {"page": 1, "top": 500, "left": 500, "bottom": 525, "right": 650},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "total_liabilities",
+            "expected_value": "$1,123,000.00",
+            "position": {"page": 1, "top": 530, "left": 500, "bottom": 555, "right": 650},
+            "expected_confidence": 0.86
+          },
+          {
+            "name": "net_worth",
+            "expected_value": "$1,222,000.00",
+            "position": {"page": 1, "top": 560, "left": 500, "bottom": 585, "right": 650},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "annual_income",
+            "expected_value": "$350,000.00",
+            "position": {"page": 2, "top": 200, "left": 500, "bottom": 225, "right": 650},
+            "expected_confidence": 0.84
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 2, "top": 600, "left": 200, "bottom": 650, "right": 400},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "date_signed",
+            "expected_value": "05/01/2023",
+            "position": {"page": 2, "top": 600, "left": 450, "bottom": 625, "right": 550},
+            "expected_confidence": 0.88
+          }
+        ],
+        "tables": [
+          {
+            "name": "assets",
+            "position": {"page": 1, "top": 250, "left": 100, "bottom": 450, "right": 650},
+            "expected_confidence": 0.83,
+            "rows": 6,
+            "columns": 2,
+            "headers": ["Asset Description", "Value"],
+            "data": [
+              ["Cash in Banks", "$245,000.00"],
+              ["Real Estate - Primary Residence", "$950,000.00"],
+              ["Real Estate - Investment Property", "$750,000.00"],
+              ["Stocks and Bonds", "$325,000.00"],
+              ["Retirement Accounts", "$75,000.00"]
+            ]
+          },
+          {
+            "name": "liabilities",
+            "position": {"page": 2, "top": 50, "left": 100, "bottom": 180, "right": 650},
+            "expected_confidence": 0.82,
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Liability Description", "Amount"],
+            "data": [
+              ["Mortgage - Primary Residence", "$650,000.00"],
+              ["Mortgage - Investment Property", "$425,000.00"],
+              ["Auto Loans", "$35,000.00"],
+              ["Credit Card Debt", "$13,000.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_note_001",
+      "filename": "business_plan_notes.pdf",
+      "category": "notes",
+      "document_type": "business_notes",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "240dpi",
+        "handwriting_style": "cursive",
+        "legibility": "medium",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "title",
+            "expected_value": "Global Ventures Expansion Plan",
+            "position": {"page": 1, "top": 100, "left": 200, "bottom": 125, "right": 500},
+            "expected_confidence": 0.83
+          },
+          {
+            "name": "author",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 130, "left": 200, "bottom": 155, "right": 400},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "date",
+            "expected_value": "04/25/2023",
+            "position": {"page": 1, "top": 160, "left": 200, "bottom": 185, "right": 300},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "expansion_cost",
+            "expected_value": "$300,000",
+            "position": {"page": 2, "top": 350, "left": 300, "bottom": 375, "right": 400},
+            "expected_confidence": 0.84
+          },
+          {
+            "name": "projected_revenue",
+            "expected_value": "$750,000",
+            "position": {"page": 2, "top": 400, "left": 300, "bottom": 425, "right": 400},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 3, "top": 500, "left": 400, "bottom": 550, "right": 600},
+            "expected_confidence": 0.80
+          }
+        ],
+        "text_blocks": [
+          {
+            "name": "executive_summary",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.78,
+            "expected_text_snippet": "Global Ventures plans to expand operations to the West Coast market with a new retail location in San Francisco"
+          },
+          {
+            "name": "financial_projections",
+            "position": {"page": 2, "top": 200, "left": 100, "bottom": 450, "right": 700},
+            "expected_confidence": 0.75,
+            "expected_text_snippet": "First year revenue projections indicate a potential return on investment within 18 months of opening"
+          },
+          {
+            "name": "action_items",
+            "position": {"page": 3, "top": 100, "left": 100, "bottom": 400, "right": 700},
+            "expected_confidence": 0.76,
+            "expected_text_snippet": "Secure retail space lease by June 2023, Begin hiring process by July 2023, Complete renovations by September 2023"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_signature_001",
+      "filename": "signature_samples.pdf",
+      "category": "signatures",
+      "document_type": "signature_page",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "cursive",
+        "legibility": "variable",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "low"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "signature_1_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 175, "right": 300},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "signature_1",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 180, "left": 100, "bottom": 230, "right": 300},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "signature_1_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 235, "left": 100, "bottom": 260, "right": 200},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "signature_2_name",
+            "expected_value": "Michael R. Johnson",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 325, "right": 300},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "signature_2",
+            "expected_value": "Michael Johnson",
+            "position": {"page": 1, "top": 330, "left": 100, "bottom": 380, "right": 300},
+            "expected_confidence": 0.83
+          },
+          {
+            "name": "signature_2_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 385, "left": 100, "bottom": 410, "right": 200},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "signature_3_name",
+            "expected_value": "David A. Thompson",
+            "position": {"page": 1, "top": 450, "left": 100, "bottom": 475, "right": 300},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "signature_3",
+            "expected_value": "David Thompson",
+            "position": {"page": 1, "top": 480, "left": 100, "bottom": 530, "right": 300},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "signature_3_date",
+            "expected_value": "05/16/2023",
+            "position": {"page": 1, "top": 535, "left": 100, "bottom": 560, "right": 200},
+            "expected_confidence": 0.88
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_app_form_002",
+      "filename": "mca_application_low_quality.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "150dpi",
+        "handwriting_style": "mixed",
+        "legibility": "low",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high",
+        "issues": ["smudges", "faded_ink", "uneven_pressure", "skewed"]
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Riverside Cafe",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.75
+          },
+          {
+            "name": "dba_name",
+            "expected_value": "Riverside Coffee & Bakery",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
+            "expected_confidence": 0.72
+          },
+          {
+            "name": "ein",
+            "expected_value": "87-6543210",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.78
+          },
+          {
+            "name": "business_address",
+            "expected_value": "456 River Road, Riverside, CA 92501",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
+            "expected_confidence": 0.70
+          },
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$75,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.76
+          },
+          {
+            "name": "owner_name",
+            "expected_value": "Robert L. Martinez",
+            "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.74
+          },
+          {
+            "name": "signature",
+            "expected_value": "Robert Martinez",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.68
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.65,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "Riverside Community Bank", "XXXX3456", "$12,345.67"],
+              ["Savings", "Riverside Community Bank", "XXXX7890", "$5,432.10"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_id_doc_001",
+      "filename": "identity_verification_form.pdf",
+      "category": "identity_documents",
+      "document_type": "verification_form",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "print",
+        "legibility": "high",
+        "has_tables": false,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "full_name",
+            "expected_value": "Sarah Jane Williams",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 450},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "date_of_birth",
+            "expected_value": "06/12/1975",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "drivers_license",
+            "expected_value": "NY12345678",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 350},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "home_address",
+            "expected_value": "123 Maple Drive, Commerce City, NY 10001",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 550},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "phone_number",
+            "expected_value": "(555) 123-4567",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 350},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "email_address",
+            "expected_value": "sarah.williams@globalventures.com",
+            "position": {"page": 1, "top": 330, "left": 200, "bottom": 355, "right": 500},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.86
+          },
+          {
+            "name": "date_signed",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.92
+          }
+        ],
+        "checkboxes": [
+          {
+            "name": "id_verification_method_drivers_license",
+            "expected_value": true,
+            "position": {"page": 1, "top": 380, "left": 200, "bottom": 395, "right": 215},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "id_verification_method_passport",
+            "expected_value": false,
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 415, "right": 215},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "id_verification_method_state_id",
+            "expected_value": false,
+            "position": {"page": 1, "top": 420, "left": 200, "bottom": 435, "right": 215},
+            "expected_confidence": 0.95
+          }
+        ]
+      }
+    }
+  ],
+  "test_parameters": {
+    "confidence_thresholds": {
+      "high_quality": 0.90,
+      "medium_quality": 0.80,
+      "low_quality": 0.70
+    },
+    "accuracy_metrics": {
+      "field_extraction": {
+        "exact_match": "Value must match exactly, including capitalization and punctuation",
+        "fuzzy_match": "Value must have Levenshtein distance <= 3 for short fields, <= 7 for long fields",
+        "numeric_match": "Numeric values must be within 0.1% of expected value"
+      },
+      "position_tolerance": {
+        "high_quality": {"x": 15, "y": 10},
+        "medium_quality": {"x": 20, "y": 15},
+        "low_quality": {"x": 30, "y": 20}
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 3 seconds",
+        "per_document": "< 15 seconds"
+      },
+      "memory_usage": "< 1.5GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "handwriting_analysis": {
+    "style_characteristics": {
+      "cursive": {
+        "description": "Connected flowing script where letters are joined together",
+        "challenges": ["letter connectivity", "variable slant", "inconsistent spacing", "ambiguous character boundaries", "loop variations"],
+        "expected_confidence_impact": "-10% compared to print",
+        "common_errors": {
+          "character_confusions": ["e/i", "a/o", "u/v", "n/m", "r/s"],
+          "segmentation_issues": "Difficulty separating connected characters",
+          "context_dependency": "Character recognition highly dependent on surrounding characters"
+        },
+        "test_focus_areas": ["signature fields", "notes", "personal information fields"]
+      },
+      "print": {
+        "description": "Disconnected letters written individually",
+        "challenges": ["character ambiguity", "inconsistent character formation", "stroke variations", "alignment issues"],
+        "expected_confidence_impact": "baseline for comparison",
+        "common_errors": {
+          "character_confusions": ["0/O", "1/l/I", "5/S", "8/B", "2/Z"],
+          "segmentation_issues": "Inconsistent spacing between characters and words",
+          "context_dependency": "Less context-dependent than cursive but affected by individual writing habits"
+        },
+        "test_focus_areas": ["form fields", "numerical data", "addresses"]
+      },
+      "mixed": {
+        "description": "Combination of cursive and print styles",
+        "challenges": ["style transitions", "inconsistent character formation", "variable spacing", "unpredictable connectivity"],
+        "expected_confidence_impact": "-15% compared to print",
+        "common_errors": {
+          "character_confusions": ["combines issues from both cursive and print"],
+          "segmentation_issues": "Unpredictable transitions between connected and disconnected text",
+          "context_dependency": "Highly variable depending on writer's habits and fatigue"
+        },
+        "test_focus_areas": ["longer form fields", "notes", "explanatory text"]
+      },
+      "block_letters": {
+        "description": "All capital letters written individually",
+        "challenges": ["lack of case differentiation", "spacing inconsistencies", "rigid formation"],
+        "expected_confidence_impact": "+5% compared to print",
+        "common_errors": {
+          "character_confusions": ["E/F", "M/N", "D/O", "C/G", "P/R"],
+          "segmentation_issues": "Generally fewer segmentation issues but spacing can be inconsistent",
+          "context_dependency": "Less context-dependent due to standardized character shapes"
+        },
+        "test_focus_areas": ["form headers", "emphasized information", "short codes and identifiers"]
+      },
+      "calligraphy": {
+        "description": "Decorative, artistic handwriting style",
+        "challenges": ["decorative elements", "extreme character variations", "unusual proportions", "flourishes", "non-standard formations"],
+        "expected_confidence_impact": "-25% compared to print",
+        "common_errors": {
+          "character_confusions": ["highly variable based on specific calligraphic style"],
+          "segmentation_issues": "Decorative elements often confused with character components",
+          "context_dependency": "Highly style-dependent with significant variations between writers"
+        },
+        "test_focus_areas": ["signatures", "document titles", "certificates"]
+      }
+    },
+    "document_specific_challenges": {
+      "loan_applications": {
+        "critical_fields": ["business_name", "ein", "funding_amount_requested", "signature"],
+        "common_issues": "Mixed numerical and text data with varying writing styles across multiple pages",
+        "accuracy_requirements": "≥ 95% for numerical fields, ≥ 90% for text fields"
+      },
+      "financial_statements": {
+        "critical_fields": ["total_assets", "total_liabilities", "net_worth", "signature"],
+        "common_issues": "Complex numerical data with currency symbols and decimal alignment",
+        "accuracy_requirements": "≥ 97% for numerical fields, ≥ 90% for text fields"
+      },
+      "business_notes": {
+        "critical_fields": ["expansion_cost", "projected_revenue", "action_items"],
+        "common_issues": "Unstructured text with varying legibility and organization",
+        "accuracy_requirements": "≥ 85% for text blocks, ≥ 92% for numerical values"
+      },
+      "signature_pages": {
+        "critical_fields": ["signature", "date_signed", "printed_name"],
+        "common_issues": "Highly variable signature styles with potential for flourishes and stylization",
+        "accuracy_requirements": "≥ 90% for printed name, ≥ 85% for signature recognition"
+      },
+      "identity_verification": {
+        "critical_fields": ["full_name", "date_of_birth", "ssn", "drivers_license"],
+        "common_issues": "Mixture of alphanumeric data with specific formatting requirements",
+        "accuracy_requirements": "≥ 98% for identification numbers, ≥ 95% for personal information"
+      }
+    },
+    
+    "legibility_factors": {
+      "high": {
+        "description": "Clear, consistent handwriting with good spacing and alignment",
+        "expected_confidence_impact": "baseline for comparison"
+      },
+      "medium": {
+        "description": "Generally readable but with some inconsistencies in formation or spacing",
+        "expected_confidence_impact": "-10% compared to high legibility"
+      },
+      "low": {
+        "description": "Difficult to read with significant inconsistencies, poor spacing, or formation issues",
+        "expected_confidence_impact": "-25% compared to high legibility"
+      },
+      "variable": {
+        "description": "Quality varies significantly within the document",
+        "expected_confidence_impact": "varies by region, -5% to -20% compared to high legibility"
+      }
+    }
+  },
+  "related_manifests": [
+    "../typed_documents/sample_manifest.json",
+    "../mixed_documents/sample_manifest.json"
+  ],
+  "testing_guidelines": {
+    "test_execution": {
+      "baseline_tests": "Run tests against high-quality print handwriting samples first to establish baseline performance",
+      "style_variation_tests": "Test each handwriting style separately to isolate style-specific challenges",
+      "quality_degradation_tests": "Test performance degradation across quality levels to establish confidence thresholds",
+      "field_type_tests": "Test specific field types (numbers, dates, addresses) to measure type-specific accuracy"
+    },
+    "test_scenarios": [
+      {
+        "name": "baseline_accuracy",
+        "description": "Validate basic OCR accuracy on high-quality handwritten documents",
+        "documents": ["hw_app_form_001", "hw_id_doc_001"],
+        "success_criteria": "All fields extracted with confidence scores meeting or exceeding expected values",
+        "execution_frequency": "Every build"
+      },
+      {
+        "name": "cursive_recognition",
+        "description": "Test OCR performance specifically on cursive handwriting",
+        "documents": ["hw_note_001", "hw_signature_001"],
+        "success_criteria": "Field extraction accuracy within 10% of baseline print handwriting performance",
+        "execution_frequency": "Daily"
+      },
+      {
+        "name": "low_quality_resilience",
+        "description": "Validate OCR performance on low-quality handwritten documents",
+        "documents": ["hw_app_form_002"],
+        "success_criteria": "Critical fields extracted with minimum 70% confidence",
+        "execution_frequency": "Daily"
+      },
+      {
+        "name": "numerical_accuracy",
+        "description": "Test accuracy of numerical field extraction across document types",
+        "documents": ["hw_app_form_001", "hw_fin_doc_001", "hw_note_001"],
+        "target_fields": ["funding_amount_requested", "total_assets", "total_liabilities", "expansion_cost", "projected_revenue"],
+        "success_criteria": "Numerical values extracted with 95% accuracy and correct formatting",
+        "execution_frequency": "Every build"
+      },
+      {
+        "name": "signature_verification",
+        "description": "Test signature extraction and verification capabilities",
+        "documents": ["hw_signature_001", "hw_app_form_001", "hw_fin_doc_001"],
+        "target_fields": ["signature", "signature_1", "signature_2", "signature_3"],
+        "success_criteria": "Signatures extracted with minimum 80% confidence and correct attribution",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "mixed_style_handling",
+        "description": "Test OCR performance on documents with mixed handwriting styles",
+        "documents": ["hw_fin_doc_001", "hw_app_form_002"],
+        "success_criteria": "Field extraction accuracy within 15% of baseline print handwriting performance",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "form_structure_recognition",
+        "description": "Test ability to recognize form structure and correctly map fields in handwritten forms",
+        "documents": ["hw_app_form_001", "hw_id_doc_001"],
+        "success_criteria": "Correct field mapping for 95% of form fields regardless of handwriting quality",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "performance_benchmark",
+        "description": "Measure processing time and resource usage across all handwritten document types",
+        "documents": ["hw_app_form_001", "hw_fin_doc_001", "hw_note_001", "hw_signature_001", "hw_app_form_002", "hw_id_doc_001"],
+        "success_criteria": "Processing time within specified limits, memory usage below thresholds",
+        "execution_frequency": "Weekly"
+      }
+    ],
+    
+    "validation_methods": {
+      "character_level": "Validate character-by-character accuracy for critical fields like EIN, SSN, and account numbers",
+      "field_level": "Validate complete field extraction accuracy using exact and fuzzy matching as appropriate",
+      "semantic_level": "Validate that extracted information maintains correct semantic meaning even with minor character errors"
+    },
+    "performance_benchmarks": {
+      "accuracy_targets": {
+        "high_quality_print": "≥ 95% field-level accuracy",
+        "high_quality_cursive": "≥ 90% field-level accuracy",
+        "medium_quality_print": "≥ 85% field-level accuracy",
+        "medium_quality_cursive": "≥ 80% field-level accuracy",
+        "low_quality_print": "≥ 75% field-level accuracy",
+        "low_quality_cursive": "≥ 70% field-level accuracy"
+      },
+      "speed_targets": {
+        "high_quality": "< 3 seconds per page",
+        "medium_quality": "< 4 seconds per page",
+        "low_quality": "< 5 seconds per page"
+      }
+    },
+    "test_data_management": {
+      "sample_rotation": "Regularly rotate test samples to prevent model overfitting to specific test cases",
+      "sample_augmentation": "Create additional test samples through controlled degradation of existing samples",
+      "real_world_validation": "Periodically validate against new real-world samples to ensure continued accuracy"
+    }
+  }
+}

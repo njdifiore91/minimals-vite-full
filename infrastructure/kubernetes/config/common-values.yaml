@@ -1,0 +1,869 @@
+# Common Kubernetes configuration values for MCA Application Processing System
+# These values are shared across all environments (development, staging, production)
+#
+# This file defines the base configuration for all services and infrastructure components
+# used in the Merchant Cash Advance (MCA) Application Processing System. It includes:
+#   - Standard Docker image versions for all services
+#   - Default resource requests and limits for containers
+#   - Security contexts with non-root users and read-only filesystems
+#   - Standard labels and annotations for all Kubernetes resources
+#   - Liveness and readiness probe defaults for all services
+#   - Common network policies and security configurations
+#
+# Environment-specific overrides should be defined in the respective environment values files:
+#   - development-values.yaml
+#   - staging-values.yaml
+#   - production-values.yaml
+
+# Global settings applied to all resources
+global:
+  # Common labels applied to all resources
+  labels:
+    app.kubernetes.io/part-of: "mca-processing-system"
+    app.kubernetes.io/managed-by: "helm"
+    app.kubernetes.io/created-by: "dollarfunding-devops"
+  
+  # Common annotations
+  annotations:
+    maintainer: "dollarfunding-devops@dollarfunding.com"
+    documentation: "https://github.com/dollarfunding/mca-docs"
+    system: "merchant-cash-advance"
+
+  # Image pull policy for all containers
+  imagePullPolicy: IfNotPresent
+  
+  # Image pull secrets if using private registry
+  imagePullSecrets: []
+  
+  # Default security context for all pods
+  podSecurityContext:
+    fsGroup: 1000
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  # Default security context for all containers
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    privileged: false
+  
+  # Default resource limits and requests
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  
+  # Default liveness probe
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  # Default readiness probe
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+# Service-specific default configurations
+services:
+  # Email Service (Node.js)
+  emailService:
+    image:
+      repository: "dollarfunding/email-service"
+      tag: "latest"
+      baseImage: "node:20-alpine"
+    ports:
+      - name: http
+        containerPort: 3000
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: http
+    readinessProbe:
+      httpGet:
+        path: /health/ready
+        port: http
+    securityContext:
+      # Override with email-service specific security context if needed
+      readOnlyRootFilesystem: false  # May need write access for temp files
+    volumeMounts:
+      - name: tmp-volume
+        mountPath: /tmp
+      - name: email-config
+        mountPath: /app/config
+        readOnly: true
+    volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: email-config
+        configMap:
+          name: email-service-config
+
+  # Document Service (Python)
+  documentService:
+    image:
+      repository: "dollarfunding/document-service"
+      tag: "latest"
+      baseImage: "python:3.9-slim"
+    ports:
+      - name: http
+        containerPort: 5000
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: http
+    readinessProbe:
+      httpGet:
+        path: /health/ready
+        port: http
+    securityContext:
+      readOnlyRootFilesystem: false  # Python may need write access for temp files
+    volumeMounts:
+      - name: tmp-volume
+        mountPath: /tmp
+      - name: model-storage
+        mountPath: /app/models
+        readOnly: true
+    volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: document-service-models-pvc
+
+  # OCR Service (Python with GPU support)
+  ocrService:
+    image:
+      repository: "dollarfunding/ocr-service"
+      tag: "latest"
+      baseImage: "python:3.9-slim"
+    ports:
+      - name: http
+        containerPort: 5000
+        protocol: TCP
+      - name: metrics
+        containerPort: 9090
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+        # GPU resources for OCR processing
+        nvidia.com/gpu: 1
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: http
+    readinessProbe:
+      httpGet:
+        path: /health/ready
+        port: http
+    securityContext:
+      readOnlyRootFilesystem: false  # Python may need write access for temp files
+    volumeMounts:
+      - name: tmp-volume
+        mountPath: /tmp
+      - name: ocr-models
+        mountPath: /app/models
+        readOnly: true
+      - name: document-cache
+        mountPath: /app/cache
+    volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: ocr-models
+        persistentVolumeClaim:
+          claimName: ocr-service-models-pvc
+      - name: document-cache
+        emptyDir: {}
+    nodeSelector:
+      accelerator: gpu  # Schedule on nodes with GPU
+
+  # Data Service (Java/Spring Boot)
+  dataService:
+    image:
+      repository: "dollarfunding/data-service"
+      tag: "latest"
+      baseImage: "openjdk:17-slim"
+    ports:
+      - name: http
+        containerPort: 8080
+        protocol: TCP
+      - name: metrics
+        containerPort: 8081
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    livenessProbe:
+      httpGet:
+        path: /actuator/health/liveness
+        port: http
+    readinessProbe:
+      httpGet:
+        path: /actuator/health/readiness
+        port: http
+    securityContext:
+      # Override with data-service specific security context if needed
+      readOnlyRootFilesystem: false  # Spring Boot may need write access for temp files
+    volumeMounts:
+      - name: tmp-volume
+        mountPath: /tmp
+      - name: application-config
+        mountPath: /app/config
+        readOnly: true
+      - name: jwt-keys
+        mountPath: /app/jwt
+        readOnly: true
+    volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: application-config
+        configMap:
+          name: data-service-config
+      - name: jwt-keys
+        secret:
+          secretName: jwt-keys-secret
+
+  # Notification Service (Node.js)
+  notificationService:
+    image:
+      repository: "dollarfunding/notification-service"
+      tag: "latest"
+      baseImage: "node:20-alpine"
+    ports:
+      - name: http
+        containerPort: 3000
+        protocol: TCP
+      - name: metrics
+        containerPort: 9090
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: http
+    readinessProbe:
+      httpGet:
+        path: /health/ready
+        port: http
+    securityContext:
+      readOnlyRootFilesystem: false  # May need write access for temp files
+    volumeMounts:
+      - name: tmp-volume
+        mountPath: /tmp
+      - name: webhook-config
+        mountPath: /app/config
+        readOnly: true
+      - name: webhook-secrets
+        mountPath: /app/secrets
+        readOnly: true
+    volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: webhook-config
+        configMap:
+          name: notification-service-config
+      - name: webhook-secrets
+        secret:
+          secretName: webhook-hmac-keys
+
+  # API Gateway (Kong)
+  apiGateway:
+    image:
+      repository: "kong/kong-gateway"
+      tag: "3.3"
+    ports:
+      - name: http
+        containerPort: 8000
+        protocol: TCP
+      - name: https
+        containerPort: 8443
+        protocol: TCP
+      - name: admin
+        containerPort: 8001
+        protocol: TCP
+      - name: admin-ssl
+        containerPort: 8444
+        protocol: TCP
+      - name: metrics
+        containerPort: 9542
+        protocol: TCP
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    livenessProbe:
+      httpGet:
+        path: /status
+        port: 8001
+    readinessProbe:
+      httpGet:
+        path: /status
+        port: 8001
+    volumeMounts:
+      - name: kong-config
+        mountPath: /kong/config
+        readOnly: true
+      - name: kong-plugins
+        mountPath: /kong/plugins
+        readOnly: true
+      - name: jwt-keys
+        mountPath: /kong/jwt
+        readOnly: true
+    volumes:
+      - name: kong-config
+        configMap:
+          name: kong-config
+      - name: kong-plugins
+        configMap:
+          name: kong-plugins
+      - name: jwt-keys
+        secret:
+          secretName: jwt-keys-secret
+    # Kong specific configuration
+    config:
+      # Rate limiting configuration
+      rateLimiting:
+        defaultLimit: 60  # 60 requests per minute for authenticated users
+        unauthenticatedLimit: 10  # 10 requests per minute for unauthenticated requests
+      # CORS configuration
+      cors:
+        enabled: true
+        origins: ["https://*.dollarfunding.com", "http://localhost:*"]
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
+        headers: ["Authorization", "Content-Type", "Accept"]
+        credentials: true
+        preflight_cache_seconds: 600
+      # JWT configuration
+      jwt:
+        algorithm: "RS256"
+        key_claim_name: "kid"
+        claims_to_verify: ["exp", "nbf", "iss", "aud"]
+        maximum_expiration: 3600  # 1 hour in seconds
+
+# Infrastructure component configurations
+infrastructure:
+  # PostgreSQL configuration
+  postgresql:
+    image:
+      repository: "postgres"
+      tag: "14"
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    persistence:
+      enabled: true
+      storageClass: "standard"
+      size: 100Gi
+    securityContext:
+      runAsUser: 999  # postgres user
+      fsGroup: 999
+    # High availability configuration
+    replication:
+      enabled: true
+      readReplicas: 1  # Will be overridden in environment-specific values
+    # Database configuration
+    databases:
+      - name: "mca_applications"
+        user: "mca_app_user"
+    # Backup configuration
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      retention: 7  # Keep 7 days of backups
+    # Monitoring configuration
+    monitoring:
+      enabled: true
+      queries:
+        - name: "active_connections"
+          query: "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'"
+        - name: "transaction_count"
+          query: "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = 'mca_applications'"
+    # Security configuration
+    security:
+      networkPolicy:
+        enabled: true
+        allowedNamespaces: ["data-service", "backup"]
+      encryption:
+        enabled: true  # Enable TDE (Transparent Data Encryption)
+
+  # RabbitMQ configuration
+  rabbitmq:
+    image:
+      repository: "rabbitmq"
+      tag: "3.12-management"
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    persistence:
+      enabled: true
+      storageClass: "standard"
+      size: 10Gi
+    # High availability configuration
+    clustering:
+      enabled: true
+      replicaCount: 3
+    # Message queue configuration
+    queues:
+      - name: "document-processing"
+        durable: true
+        arguments:
+          x-dead-letter-exchange: "mca.dead-letter"
+          x-dead-letter-routing-key: "document-processing"
+      - name: "data-extraction"
+        durable: true
+        arguments:
+          x-dead-letter-exchange: "mca.dead-letter"
+          x-dead-letter-routing-key: "data-extraction"
+      - name: "notification"
+        durable: true
+        arguments:
+          x-dead-letter-exchange: "mca.dead-letter"
+          x-dead-letter-routing-key: "notification"
+      - name: "dead-letter-queue"
+        durable: true
+    exchanges:
+      - name: "mca.documents"
+        type: "fanout"
+        durable: true
+      - name: "mca.dead-letter"
+        type: "direct"
+        durable: true
+    # Bindings between exchanges and queues
+    bindings:
+      - source: "mca.documents"
+        destination: "document-processing"
+        destination_type: "queue"
+      - source: "mca.dead-letter"
+        destination: "dead-letter-queue"
+        destination_type: "queue"
+        routing_key: "#"
+    # Security configuration
+    security:
+      tls:
+        enabled: true
+        certSecretName: "rabbitmq-tls-cert"
+      authentication:
+        enabled: true
+        mechanism: "PLAIN"
+      authorization:
+        enabled: true
+        vhosts:
+          - name: "/"
+            permissions:
+              - user: "document-service"
+                configure: "^document-.*"
+                write: "^document-.*|^mca\.documents$"
+                read: "^document-.*"
+              - user: "ocr-service"
+                configure: "^data-.*"
+                write: "^data-.*"
+                read: "^document-.*"
+              - user: "data-service"
+                configure: "^notification-.*"
+                write: "^notification-.*"
+                read: "^data-.*"
+              - user: "notification-service"
+                configure: ""
+                write: ""
+                read: "^notification-.*"
+
+  # Redis configuration
+  redis:
+    image:
+      repository: "redis"
+      tag: "7.0-alpine"
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    persistence:
+      enabled: true
+      storageClass: "standard"
+      size: 10Gi
+    # High availability configuration
+    sentinel:
+      enabled: true
+      replicas: 3
+    # Cache TTL settings
+    ttl:
+      applicationData: 900  # 15 minutes in seconds
+      userSessions: 86400  # 24 hours in seconds
+    # Memory management
+    config:
+      maxmemory: "1.5gb"
+      maxmemory-policy: "volatile-lru"
+      # Eviction policy: volatile-lru (remove least recently used keys with expiration)
+    # Security configuration
+    security:
+      tls:
+        enabled: true
+        certSecretName: "redis-tls-cert"
+      authentication:
+        enabled: true
+        secretName: "redis-auth"
+      acl:
+        enabled: true
+        rules:
+          - user: "data-service"
+            keys: "application:* session:*"
+            commands: "get set del expire"
+          - user: "notification-service"
+            keys: "notification:*"
+            commands: "get set del expire"
+          - user: "api-gateway"
+            keys: "rate-limit:* session:*"
+            commands: "get set del expire incr"
+
+  # S3-compatible storage configuration
+  s3Storage:
+    # Using MinIO for development, actual S3 for production
+    minio:
+      enabled: true  # Will be overridden in production
+      image:
+        repository: "minio/minio"
+        tag: "latest"
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+        requests:
+          cpu: 200m
+          memory: 512Mi
+      persistence:
+        enabled: true
+        storageClass: "standard"
+        size: 100Gi
+      # High availability configuration
+      replicas: 4  # For distributed mode
+      zones: 2    # For erasure coding across zones
+    # Bucket configuration
+    buckets:
+      - name: "mca-documents-${ENVIRONMENT}"
+        versioning: true
+        encryption: true  # AES-256 encryption
+        lifecycle:
+          enabled: true
+          rules:
+            - id: "archive-old-documents"
+              status: "Enabled"
+              transition:
+                days: 90
+                storageClass: "STANDARD_IA"
+            - id: "expire-temp-documents"
+              status: "Enabled"
+              expiration:
+                days: 7
+              filter:
+                prefix: "temp/"
+    # Security configuration
+    security:
+      encryption:
+        sseAlgorithm: "AES256"  # Server-side encryption
+      iam:
+        # Service-specific IAM policies
+        policies:
+          - name: "document-service-policy"
+            statements:
+              - effect: "Allow"
+                actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+                resources: ["arn:aws:s3:::mca-documents-${ENVIRONMENT}/*"]
+          - name: "ocr-service-policy"
+            statements:
+              - effect: "Allow"
+                actions: ["s3:GetObject", "s3:PutObject"]
+                resources: ["arn:aws:s3:::mca-documents-${ENVIRONMENT}/*"]
+          - name: "data-service-policy"
+            statements:
+              - effect: "Allow"
+                actions: ["s3:GetObject"]
+                resources: ["arn:aws:s3:::mca-documents-${ENVIRONMENT}/*"]
+
+# Network policies
+networkPolicies:
+  enabled: true  # Enable network policies for all services
+  defaultDenyIngress: true  # Deny all ingress traffic by default
+  defaultDenyEgress: false  # Allow egress traffic by default
+  # Service-specific network policies
+  policies:
+    # Email Service can only connect to RabbitMQ
+    emailService:
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  name: ingress-nginx
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: rabbitmq
+    # Document Service can connect to RabbitMQ and S3
+    documentService:
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: rabbitmq
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: rabbitmq
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: minio
+
+# TLS configuration
+tls:
+  enabled: true
+  minimumTLSVersion: "TLSv1.3"
+  certificateSecretName: "mca-tls-cert"
+  # Cipher suites (strong ciphers only)
+  cipherSuites:
+    - TLS_AES_128_GCM_SHA256
+    - TLS_AES_256_GCM_SHA384
+    - TLS_CHACHA20_POLY1305_SHA256
+  # Certificate configuration
+  certificates:
+    - name: "mca-wildcard-cert"
+      dnsNames:
+        - "*.mca.dollarfunding.com"
+      issuerRef:
+        name: "letsencrypt-prod"
+        kind: "ClusterIssuer"
+    - name: "mca-api-cert"
+      dnsNames:
+        - "api.mca.dollarfunding.com"
+      issuerRef:
+        name: "letsencrypt-prod"
+        kind: "ClusterIssuer"
+
+# Monitoring and observability
+monitoring:
+  # Prometheus metrics
+  prometheus:
+    enabled: true
+    scrapeInterval: "30s"
+    # Default annotations for Prometheus scraping
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "metrics"
+      prometheus.io/path: "/metrics"
+    # Service monitors for specific services
+    serviceMonitors:
+      - name: "email-service-monitor"
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: "email-service"
+        endpoints:
+          - port: metrics
+            interval: "15s"
+      - name: "ocr-service-monitor"
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: "ocr-service"
+        endpoints:
+          - port: metrics
+            interval: "15s"
+  
+  # Logging configuration
+  logging:
+    # Log levels
+    level:
+      production: "INFO"
+      staging: "INFO"
+      development: "DEBUG"
+    # Log format
+    format: "json"
+    # Structured logging fields
+    structuredFields:
+      - "timestamp"
+      - "level"
+      - "message"
+      - "service"
+      - "trace_id"
+      - "span_id"
+    # Log aggregation
+    aggregation:
+      enabled: true
+      fluentBit:
+        enabled: true
+        image:
+          repository: "fluent/fluent-bit"
+          tag: "1.9"
+  
+  # Tracing configuration
+  tracing:
+    enabled: true
+    jaeger:
+      enabled: true
+      image:
+        repository: "jaegertracing/all-in-one"
+        tag: "1.35"
+    # Sampling configuration
+    sampling:
+      probability: 0.1  # Sample 10% of requests
+  
+  # Alerting configuration
+  alerting:
+    enabled: true
+    rules:
+      # Application processing time alert
+      - name: "ApplicationProcessingTimeHigh"
+        expr: "application_processing_time_seconds > 300"
+        for: "5m"
+        labels:
+          severity: "warning"
+        annotations:
+          summary: "Application processing time is high"
+          description: "Application processing time is above 5 minutes for {{ $value }} seconds"
+      # OCR accuracy alert
+      - name: "OCRAccuracyLow"
+        expr: "ocr_accuracy_percent < 95"
+        for: "15m"
+        labels:
+          severity: "critical"
+        annotations:
+          summary: "OCR accuracy is below threshold"
+          description: "OCR accuracy is {{ $value }}%, which is below the 95% threshold"
+
+# Default affinity rules
+affinity:
+  # Pod anti-affinity to spread across nodes
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: "app.kubernetes.io/name"
+                operator: In
+                values:
+                  - "${APP_NAME}"
+          topologyKey: "kubernetes.io/hostname"
+  # Service-specific affinity rules
+  services:
+    # OCR Service requires GPU nodes
+    ocrService:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: "accelerator"
+                  operator: In
+                  values:
+                    - "gpu"
+    # Database pods should be on storage-optimized nodes
+    postgresql:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: "node-type"
+                  operator: In
+                  values:
+                    - "storage-optimized"
+
+# Node selectors
+nodeSelector:
+  # Default node selector for all services
+  default: {}
+  # Service-specific node selectors
+  services:
+    # Email Service can run on general-purpose nodes
+    emailService:
+      node-type: "general-purpose"
+    # Document Service requires more CPU
+    documentService:
+      node-type: "compute-optimized"
+    # OCR Service requires GPU
+    ocrService:
+      accelerator: "gpu"
+    # Data Service requires more memory
+    dataService:
+      node-type: "memory-optimized"
+
+# Tolerations
+tolerations:
+  # Default tolerations for all services
+  default: []
+  # Service-specific tolerations
+  services:
+    # OCR Service can tolerate GPU taints
+    ocrService:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    # Database can tolerate storage taints
+    postgresql:
+      - key: "storage-type"
+        operator: "Exists"
+        effect: "NoSchedule"
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  # Minimum available pods during disruption
+  minAvailable: 1
+  # Maximum unavailable pods during disruption
+  # maxUnavailable: 1  # Alternative to minAvailable

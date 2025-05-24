@@ -1,0 +1,73 @@
+# Production Namespace for MCA Application Processing System
+# This file defines the Kubernetes namespace for the production environment
+# where all customer-facing microservices will be deployed.
+#
+# Key considerations:
+# - Production environment must maintain 99.9% system uptime
+# - Complete isolation from development and staging workloads
+# - Strict resource controls and security settings
+# - Production-grade configurations for high availability
+#
+# This namespace is part of the multi-environment deployment strategy:
+# - Development: Local development setup
+# - Staging: Pre-production validation
+# - Production: Live system with full redundancy
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mca-production
+  labels:
+    # Core labels for identification
+    name: mca-production
+    environment: production
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: terraform
+    
+    # Labels for service discovery and filtering
+    tier: production
+    version: "1.0"
+    criticality: high
+    
+    # Network policy labels
+    network-policy: restricted
+    
+    # Monitoring and observability labels
+    monitoring: enabled
+    logging: enabled
+    tracing: enabled
+    
+  annotations:
+    # Description and documentation
+    description: "Production environment for MCA Application Processing System"
+    documentation: "https://dollarfunding.com/docs/mca-application-processing"
+    
+    # Resource management annotations
+    scheduler.alpha.kubernetes.io/node-selector: "env=production,workload=mca"
+    
+    # Compliance and security annotations
+    compliance.dollarfunding.com/data-classification: "sensitive"
+    compliance.dollarfunding.com/pci-dss: "in-scope"
+    security.dollarfunding.com/encryption: "required"
+    
+    # Backup and disaster recovery annotations
+    backup.dollarfunding.com/schedule: "daily"
+    backup.dollarfunding.com/retention: "7-years"
+    dr.dollarfunding.com/rpo: "15m"
+    dr.dollarfunding.com/rto: "30m"
+    
+    # Monitoring and alerting annotations
+    monitoring.dollarfunding.com/priority: "p1"
+    monitoring.dollarfunding.com/sla: "99.9%"
+    monitoring.dollarfunding.com/pagerduty-integration: "enabled"
+    monitoring.dollarfunding.com/datadog-integration: "enabled"
+    
+    # Cost management annotations
+    cost.dollarfunding.com/business-unit: "lending"
+    cost.dollarfunding.com/project: "mca-application-processing"
+    cost.dollarfunding.com/owner: "lending-operations"
+
+spec:
+  # Production namespace finalizers
+  finalizers:
+  - kubernetes

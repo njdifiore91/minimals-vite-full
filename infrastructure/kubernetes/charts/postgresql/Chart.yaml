@@ -1,0 +1,21 @@
+apiVersion: v2
+name: postgresql
+version: 1.0.0
+appVersion: "14.0.0"
+description: A Helm chart for PostgreSQL 14 with primary-replica configuration for the MCA Application Processing System
+type: application
+keywords:
+  - postgresql
+  - database
+  - sql
+  - primary
+  - replica
+  - high-availability
+  - connection-pooling
+maintainers:
+  - name: Dollar Funding DevOps Team
+    email: devops@dollarfunding.com
+home: https://www.dollarfunding.com/
+sources:
+  - https://github.com/dollarfunding/mca-infrastructure
+kubeVersion: ">= 1.19.0"

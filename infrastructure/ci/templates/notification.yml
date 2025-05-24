@@ -1,0 +1,598 @@
+# ======================================================
+# NOTIFICATION TEMPLATE
+# ======================================================
+# Reusable CI/CD notification template that standardizes alerting
+# mechanisms for build and deployment events across all services
+# in the Merchant Cash Advance Application Processing System.
+#
+# This template provides configurable notification steps for
+# email, Slack, and webhook delivery with templated messages
+# for different event types (build success/failure, deployment
+# start/completion, security issues).
+#
+# The template supports conditional notifications based on event
+# severity, environment type, and recipient configuration. It
+# ensures consistent communication patterns throughout the CI/CD
+# process and integrates with the notification service for
+# webhook delivery.
+# ======================================================
+
+name: Notifications
+
+# Define parameters that can be passed when including this template
+parameters:
+  # Required parameters
+  event_type:
+    description: 'Type of event triggering the notification (build_success, build_failure, deployment_start, deployment_complete, security_issue)'
+    required: true
+    type: string
+  
+  service_name:
+    description: 'Name of the service or component'
+    required: true
+    type: string
+  
+  # Optional parameters with defaults
+  environment:
+    description: 'Deployment environment (development, staging, production)'
+    required: false
+    default: 'development'
+    type: string
+  
+  severity:
+    description: 'Severity level of the notification (low, medium, high, critical)'
+    required: false
+    default: 'medium'
+    type: string
+  
+  notification_channels:
+    description: 'Comma-separated list of notification channels to use (email, slack, webhook)'
+    required: false
+    default: 'webhook'
+    type: string
+  
+  recipients:
+    description: 'JSON object defining recipients for each channel'
+    required: false
+    default: '{}'
+    type: string
+  
+  custom_message:
+    description: 'Custom message to include in the notification'
+    required: false
+    default: ''
+    type: string
+  
+  attach_logs:
+    description: 'Whether to attach build/deployment logs'
+    required: false
+    default: false
+    type: boolean
+  
+  attach_artifacts:
+    description: 'Whether to attach build artifacts'
+    required: false
+    default: false
+    type: boolean
+  
+  notification_service_url:
+    description: 'URL of the notification service API'
+    required: false
+    default: 'http://notification-service.default.svc.cluster.local/api/v1/notifications'
+    type: string
+
+# Define variables with default values
+variables:
+  # Default notification settings
+  DEFAULT_EMAIL_SUBJECT: "[${{ parameters.service_name }}] CI/CD Notification: ${{ parameters.event_type }}"
+  DEFAULT_SLACK_TITLE: "[${{ parameters.service_name }}] ${{ parameters.event_type }}"
+  
+  # Rate limiting settings
+  RATE_LIMIT_INTERVAL: "10m"  # Minimum time between similar notifications
+  RATE_LIMIT_MAX_COUNT: 3     # Maximum number of similar notifications in interval
+  
+  # Environment-specific settings
+  DEVELOPMENT_CHANNELS: "webhook"
+  STAGING_CHANNELS: "webhook,slack"
+  PRODUCTION_CHANNELS: "webhook,slack,email"
+  
+  # Severity-specific settings
+  LOW_PRIORITY: "low"
+  MEDIUM_PRIORITY: "medium"
+  HIGH_PRIORITY: "high"
+  CRITICAL_PRIORITY: "critical"
+  
+  # Notification history settings
+  HISTORY_RETENTION_DAYS: 30
+  
+  # Default recipients (can be overridden)
+  DEFAULT_RECIPIENTS: |
+    {
+      "email": ["devops@dollarfunding.com"],
+      "slack": ["#ci-cd-notifications"],
+      "webhook": ["https://api.dollarfunding.com/webhooks/ci-notifications"]
+    }
+
+# Reusable job templates
+.notification_base:
+  stage: .post
+  variables:
+    # Determine channels based on environment
+    NOTIFICATION_CHANNELS: |
+      ${{ if eq(parameters.environment, 'development') }}:
+        ${{ variables.DEVELOPMENT_CHANNELS }}
+      ${{ elif eq(parameters.environment, 'staging') }}:
+        ${{ variables.STAGING_CHANNELS }}
+      ${{ elif eq(parameters.environment, 'production') }}:
+        ${{ variables.PRODUCTION_CHANNELS }}
+      ${{ else }}:
+        ${{ parameters.notification_channels }}
+    
+    # Determine priority based on severity
+    NOTIFICATION_PRIORITY: |
+      ${{ if eq(parameters.severity, 'low') }}:
+        ${{ variables.LOW_PRIORITY }}
+      ${{ elif eq(parameters.severity, 'medium') }}:
+        ${{ variables.MEDIUM_PRIORITY }}
+      ${{ elif eq(parameters.severity, 'high') }}:
+        ${{ variables.HIGH_PRIORITY }}
+      ${{ elif eq(parameters.severity, 'critical') }}:
+        ${{ variables.CRITICAL_PRIORITY }}
+      ${{ else }}:
+        ${{ variables.MEDIUM_PRIORITY }}
+    
+    # Use provided recipients or fall back to defaults
+    NOTIFICATION_RECIPIENTS: |
+      ${{ if ne(parameters.recipients, '{}') }}:
+        ${{ parameters.recipients }}
+      ${{ else }}:
+        ${{ variables.DEFAULT_RECIPIENTS }}
+  
+  # Common setup for all notification jobs
+  before_script:
+    - echo "Preparing notification for ${{ parameters.event_type }} event"
+    - |
+      # Generate notification ID for tracking and rate limiting
+      NOTIFICATION_ID="$(echo "${{ parameters.service_name }}-${{ parameters.event_type }}-${{ parameters.environment }}" | md5sum | cut -d' ' -f1)"
+      echo "Notification ID: $NOTIFICATION_ID"
+      
+      # Check rate limiting
+      RECENT_COUNT=$(redis-cli --raw GET "notification:count:$NOTIFICATION_ID" || echo "0")
+      if [ "$RECENT_COUNT" -ge "$RATE_LIMIT_MAX_COUNT" ]; then
+        echo "Rate limit exceeded for this notification type. Skipping."
+        exit 0
+      fi
+      
+      # Increment counter
+      redis-cli INCR "notification:count:$NOTIFICATION_ID"
+      redis-cli EXPIRE "notification:count:$NOTIFICATION_ID" $(echo "$RATE_LIMIT_INTERVAL" | sed 's/m/*60/g' | bc)
+      
+      # Prepare notification payload
+      cat > notification_payload.json << EOF
+      {
+        "type": "${{ parameters.event_type }}",
+        "priority": "$NOTIFICATION_PRIORITY",
+        "service": "${{ parameters.service_name }}",
+        "environment": "${{ parameters.environment }}",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "build_number": "$CI_PIPELINE_ID",
+        "build_url": "$CI_PIPELINE_URL",
+        "commit_sha": "$CI_COMMIT_SHA",
+        "commit_message": "$CI_COMMIT_MESSAGE",
+        "branch": "$CI_COMMIT_REF_NAME",
+        "triggered_by": "$GITLAB_USER_NAME",
+        "custom_message": "${{ parameters.custom_message }}"
+      }
+      EOF
+      
+      # Prepare artifacts if needed
+      if [ "${{ parameters.attach_logs }}" = "true" ]; then
+        echo "Collecting logs for attachment"
+        mkdir -p ./notification_artifacts
+        cp -r ./logs/* ./notification_artifacts/ || echo "No logs found"
+      fi
+      
+      if [ "${{ parameters.attach_artifacts }}" = "true" ]; then
+        echo "Collecting build artifacts for attachment"
+        mkdir -p ./notification_artifacts
+        cp -r ./artifacts/* ./notification_artifacts/ || echo "No artifacts found"
+      fi
+
+# Webhook notification job
+.webhook_notification:
+  extends: .notification_base
+  script:
+    - echo "Sending webhook notification"
+    - |
+      # Extract webhook URLs from recipients
+      WEBHOOK_URLS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.webhook[]')
+      
+      # Send to notification service
+      for URL in $WEBHOOK_URLS; do
+        echo "Sending notification to webhook: $URL"
+        
+        # Prepare webhook payload
+        jq '.recipient = {"channel": "WEBHOOK", "destination": "'"$URL"'"}' notification_payload.json > webhook_payload.json
+        
+        # Send to notification service
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+          -d @webhook_payload.json \
+          ${{ parameters.notification_service_url }}
+        
+        # Record in notification history
+        echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Webhook notification sent to $URL for ${{ parameters.event_type }}" >> notification_history.log
+      done
+  artifacts:
+    paths:
+      - notification_history.log
+    expire_in: ${{ variables.HISTORY_RETENTION_DAYS }} days
+
+# Slack notification job
+.slack_notification:
+  extends: .notification_base
+  script:
+    - echo "Sending Slack notification"
+    - |
+      # Extract Slack channels from recipients
+      SLACK_CHANNELS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.slack[]')
+      
+      # Generate Slack message with appropriate color based on event type
+      if [[ "${{ parameters.event_type }}" == *"failure"* || "${{ parameters.event_type }}" == *"error"* || "${{ parameters.event_type }}" == *"security_issue"* ]]; then
+        COLOR="danger"
+      elif [[ "${{ parameters.event_type }}" == *"success"* || "${{ parameters.event_type }}" == *"complete"* ]]; then
+        COLOR="good"
+      else
+        COLOR="warning"
+      fi
+      
+      # Send to each Slack channel
+      for CHANNEL in $SLACK_CHANNELS; do
+        echo "Sending notification to Slack channel: $CHANNEL"
+        
+        # Prepare Slack payload
+        jq '.recipient = {"channel": "SLACK", "destination": "'"$CHANNEL"'"}' notification_payload.json > slack_payload.json
+        jq '.payload.title = "'"$DEFAULT_SLACK_TITLE"'"' slack_payload.json > slack_payload_with_title.json
+        jq '.payload.color = "'"$COLOR"'"' slack_payload_with_title.json > slack_payload_final.json
+        
+        # Send to notification service
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+          -d @slack_payload_final.json \
+          ${{ parameters.notification_service_url }}
+        
+        # Record in notification history
+        echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Slack notification sent to $CHANNEL for ${{ parameters.event_type }}" >> notification_history.log
+      done
+  artifacts:
+    paths:
+      - notification_history.log
+    expire_in: ${{ variables.HISTORY_RETENTION_DAYS }} days
+
+# Email notification job
+.email_notification:
+  extends: .notification_base
+  script:
+    - echo "Sending email notification"
+    - |
+      # Extract email recipients from recipients
+      EMAIL_RECIPIENTS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.email[]')
+      
+      # Send to each email recipient
+      for EMAIL in $EMAIL_RECIPIENTS; do
+        echo "Sending notification to email: $EMAIL"
+        
+        # Prepare email payload
+        jq '.recipient = {"channel": "EMAIL", "destination": "'"$EMAIL"'"}' notification_payload.json > email_payload.json
+        jq '.payload.title = "'"$DEFAULT_EMAIL_SUBJECT"'"' email_payload.json > email_payload_with_subject.json
+        
+        # Add attachments if needed
+        if [ "${{ parameters.attach_logs }}" = "true" ] || [ "${{ parameters.attach_artifacts }}" = "true" ]; then
+          # Create tar.gz of artifacts
+          tar -czf notification_attachments.tar.gz ./notification_artifacts
+          
+          # Base64 encode the attachment
+          ATTACHMENT_B64=$(base64 -w 0 notification_attachments.tar.gz)
+          
+          # Add attachment to payload
+          jq '.payload.attachments = [{"name": "artifacts.tar.gz", "content": "'"$ATTACHMENT_B64"'", "contentType": "application/gzip"}]' email_payload_with_subject.json > email_payload_final.json
+        else
+          cp email_payload_with_subject.json email_payload_final.json
+        fi
+        
+        # Send to notification service
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+          -d @email_payload_final.json \
+          ${{ parameters.notification_service_url }}
+        
+        # Record in notification history
+        echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Email notification sent to $EMAIL for ${{ parameters.event_type }}" >> notification_history.log
+      done
+  artifacts:
+    paths:
+      - notification_history.log
+      - notification_attachments.tar.gz
+    when: on_success
+    expire_in: ${{ variables.HISTORY_RETENTION_DAYS }} days
+
+# Environment-specific notification jobs
+
+# Development environment notifications
+development_notification:
+  extends:
+    - .notification_base
+  variables:
+    NOTIFICATION_CHANNELS: ${{ variables.DEVELOPMENT_CHANNELS }}
+  script:
+    - echo "Sending development environment notification"
+    - |
+      # Only send notifications for failures in development by default
+      if [[ "${{ parameters.event_type }}" != *"failure"* && "${{ parameters.event_type }}" != *"error"* && "${{ parameters.event_type }}" != *"security_issue"* ]]; then
+        if [[ "${{ parameters.severity }}" != "high" && "${{ parameters.severity }}" != "critical" ]]; then
+          echo "Skipping non-failure notification in development environment"
+          exit 0
+        fi
+      fi
+      
+      # Process each enabled channel
+      if [[ "$NOTIFICATION_CHANNELS" == *"webhook"* ]]; then
+        # Call webhook notification script
+        source ./.gitlab-ci-includes/webhook_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"slack"* ]]; then
+        # Call Slack notification script
+        source ./.gitlab-ci-includes/slack_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"email"* ]]; then
+        # Call email notification script
+        source ./.gitlab-ci-includes/email_notification.sh
+      fi
+  rules:
+    - if: ${{ parameters.environment == 'development' }}
+
+# Staging environment notifications
+staging_notification:
+  extends:
+    - .notification_base
+  variables:
+    NOTIFICATION_CHANNELS: ${{ variables.STAGING_CHANNELS }}
+  script:
+    - echo "Sending staging environment notification"
+    - |
+      # Process each enabled channel
+      if [[ "$NOTIFICATION_CHANNELS" == *"webhook"* ]]; then
+        # Call webhook notification script
+        source ./.gitlab-ci-includes/webhook_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"slack"* ]]; then
+        # Call Slack notification script
+        source ./.gitlab-ci-includes/slack_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"email"* ]]; then
+        # Call email notification script
+        source ./.gitlab-ci-includes/email_notification.sh
+      fi
+  rules:
+    - if: ${{ parameters.environment == 'staging' }}
+
+# Production environment notifications
+production_notification:
+  extends:
+    - .notification_base
+  variables:
+    NOTIFICATION_CHANNELS: ${{ variables.PRODUCTION_CHANNELS }}
+  script:
+    - echo "Sending production environment notification"
+    - |
+      # Process each enabled channel
+      if [[ "$NOTIFICATION_CHANNELS" == *"webhook"* ]]; then
+        # Call webhook notification script
+        source ./.gitlab-ci-includes/webhook_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"slack"* ]]; then
+        # Call Slack notification script
+        source ./.gitlab-ci-includes/slack_notification.sh
+      fi
+      
+      if [[ "$NOTIFICATION_CHANNELS" == *"email"* ]]; then
+        # Call email notification script
+        source ./.gitlab-ci-includes/email_notification.sh
+      fi
+  rules:
+    - if: ${{ parameters.environment == 'production' }}
+
+# Channel-specific notification jobs
+
+# Webhook-only notification
+webhook_notification:
+  extends:
+    - .webhook_notification
+  rules:
+    - if: ${{ contains(parameters.notification_channels, 'webhook') }}
+
+# Slack-only notification
+slack_notification:
+  extends:
+    - .slack_notification
+  rules:
+    - if: ${{ contains(parameters.notification_channels, 'slack') }}
+
+# Email-only notification
+email_notification:
+  extends:
+    - .email_notification
+  rules:
+    - if: ${{ contains(parameters.notification_channels, 'email') }}
+
+# Combined notification job that handles all channels
+notify:
+  extends:
+    - .notification_base
+  script:
+    - echo "Sending notifications to all configured channels"
+    - |
+      # Process each enabled channel
+      if [[ "${{ parameters.notification_channels }}" == *"webhook"* ]]; then
+        echo "Sending webhook notification"
+        # Include webhook notification logic
+        WEBHOOK_URLS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.webhook[]')
+        
+        for URL in $WEBHOOK_URLS; do
+          echo "Sending notification to webhook: $URL"
+          
+          # Prepare webhook payload
+          jq '.recipient = {"channel": "WEBHOOK", "destination": "'"$URL"'"}' notification_payload.json > webhook_payload.json
+          
+          # Send to notification service
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+            -d @webhook_payload.json \
+            ${{ parameters.notification_service_url }}
+          
+          echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Webhook notification sent to $URL for ${{ parameters.event_type }}" >> notification_history.log
+        done
+      fi
+      
+      if [[ "${{ parameters.notification_channels }}" == *"slack"* ]]; then
+        echo "Sending Slack notification"
+        # Include Slack notification logic
+        SLACK_CHANNELS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.slack[]')
+        
+        # Generate Slack message with appropriate color based on event type
+        if [[ "${{ parameters.event_type }}" == *"failure"* || "${{ parameters.event_type }}" == *"error"* || "${{ parameters.event_type }}" == *"security_issue"* ]]; then
+          COLOR="danger"
+        elif [[ "${{ parameters.event_type }}" == *"success"* || "${{ parameters.event_type }}" == *"complete"* ]]; then
+          COLOR="good"
+        else
+          COLOR="warning"
+        fi
+        
+        for CHANNEL in $SLACK_CHANNELS; do
+          echo "Sending notification to Slack channel: $CHANNEL"
+          
+          # Prepare Slack payload
+          jq '.recipient = {"channel": "SLACK", "destination": "'"$CHANNEL"'"}' notification_payload.json > slack_payload.json
+          jq '.payload.title = "'"$DEFAULT_SLACK_TITLE"'"' slack_payload.json > slack_payload_with_title.json
+          jq '.payload.color = "'"$COLOR"'"' slack_payload_with_title.json > slack_payload_final.json
+          
+          # Send to notification service
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+            -d @slack_payload_final.json \
+            ${{ parameters.notification_service_url }}
+          
+          echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Slack notification sent to $CHANNEL for ${{ parameters.event_type }}" >> notification_history.log
+        done
+      fi
+      
+      if [[ "${{ parameters.notification_channels }}" == *"email"* ]]; then
+        echo "Sending email notification"
+        # Include email notification logic
+        EMAIL_RECIPIENTS=$(echo '$NOTIFICATION_RECIPIENTS' | jq -r '.email[]')
+        
+        for EMAIL in $EMAIL_RECIPIENTS; do
+          echo "Sending notification to email: $EMAIL"
+          
+          # Prepare email payload
+          jq '.recipient = {"channel": "EMAIL", "destination": "'"$EMAIL"'"}' notification_payload.json > email_payload.json
+          jq '.payload.title = "'"$DEFAULT_EMAIL_SUBJECT"'"' email_payload.json > email_payload_with_subject.json
+          
+          # Add attachments if needed
+          if [ "${{ parameters.attach_logs }}" = "true" ] || [ "${{ parameters.attach_artifacts }}" = "true" ]; then
+            # Create tar.gz of artifacts
+            tar -czf notification_attachments.tar.gz ./notification_artifacts
+            
+            # Base64 encode the attachment
+            ATTACHMENT_B64=$(base64 -w 0 notification_attachments.tar.gz)
+            
+            # Add attachment to payload
+            jq '.payload.attachments = [{"name": "artifacts.tar.gz", "content": "'"$ATTACHMENT_B64"'", "contentType": "application/gzip"}]' email_payload_with_subject.json > email_payload_final.json
+          else
+            cp email_payload_with_subject.json email_payload_final.json
+          fi
+          
+          # Send to notification service
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NOTIFICATION_SERVICE_API_KEY" \
+            -d @email_payload_final.json \
+            ${{ parameters.notification_service_url }}
+          
+          echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") - Email notification sent to $EMAIL for ${{ parameters.event_type }}" >> notification_history.log
+        done
+      fi
+  artifacts:
+    paths:
+      - notification_history.log
+      - notification_attachments.tar.gz
+    when: on_success
+    expire_in: ${{ variables.HISTORY_RETENTION_DAYS }} days
+
+# Example usage:
+# 
+# include:
+#   - project: 'infrastructure/ci/templates'
+#     file: 'notification.yml'
+#
+# stages:
+#   - build
+#   - test
+#   - deploy
+#   - notify
+#
+# build_app:
+#   stage: build
+#   script:
+#     - echo "Building application..."
+#     # Build commands here
+#   after_script:
+#     - |
+#       if [ $CI_JOB_STATUS == "success" ]; then
+#         echo "Build succeeded, sending notification"
+#         # This will be picked up by the notification job
+#         echo "BUILD_SUCCESS=true" >> build.env
+#       else
+#         echo "Build failed, sending notification"
+#         echo "BUILD_FAILURE=true" >> build.env
+#       fi
+#   artifacts:
+#     reports:
+#       dotenv: build.env
+#
+# notify_build_success:
+#   extends: notify
+#   stage: notify
+#   variables:
+#     event_type: "build_success"
+#     service_name: "my-service"
+#     environment: "development"
+#     severity: "low"
+#     notification_channels: "slack,webhook"
+#     custom_message: "Build completed successfully in ${CI_JOB_DURATION} seconds"
+#   rules:
+#     - if: $BUILD_SUCCESS == "true"
+#
+# notify_build_failure:
+#   extends: notify
+#   stage: notify
+#   variables:
+#     event_type: "build_failure"
+#     service_name: "my-service"
+#     environment: "development"
+#     severity: "high"
+#     notification_channels: "slack,email,webhook"
+#     custom_message: "Build failed! Check logs for details."
+#     attach_logs: true
+#   rules:
+#     - if: $BUILD_FAILURE == "true"

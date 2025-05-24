@@ -1,0 +1,190 @@
+{{- /*
+ConfigMap template for MCA Application Processing System microservices
+
+This template creates a Kubernetes ConfigMap for storing non-sensitive configuration data.
+It supports environment-specific configurations through value files and includes proper
+data formatting for different configuration types.
+
+Usage:
+  - Include this template in your service's Helm chart
+  - Define configuration values in your values.yaml file under the 'config' key
+  - Override values in environment-specific value files as needed
+*/}}
+
+{{- define "common.configmap" -}}
+{{- $name := include "common.fullname" . -}}
+{{- $labels := include "common.labels" . -}}
+{{- with .Values.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | nindent 4 }}
+  annotations:
+    {{- with $.Values.configAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    "app.kubernetes.io/config-version": {{ default "1.0.0" $.Chart.AppVersion | quote }}
+    "app.kubernetes.io/managed-by": {{ $.Release.Service | quote }}
+    "meta.helm.sh/release-name": {{ $.Release.Name | quote }}
+    "meta.helm.sh/release-namespace": {{ $.Release.Namespace | quote }}
+    {{- if $.Values.configVersioning }}
+    "config.mca.dollarfunding.com/version": {{ $.Values.configVersioning.version | default "1" | quote }}
+    "config.mca.dollarfunding.com/last-updated": {{ now | date "2006-01-02T15:04:05Z07:00" | quote }}
+    {{- end }}
+data:
+  {{- range $key, $value := .data }}
+  {{ $key }}: {{ tpl (toString $value) $ | quote }}
+  {{- end }}
+  {{- if .files }}
+  {{- range $key, $value := .files }}
+  {{ $key }}: |
+    {{- tpl $value $ | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if .json }}
+  {{- range $key, $value := .json }}
+  {{ $key }}: {{ tpl (toJson $value) $ | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .yaml }}
+  {{- range $key, $value := .yaml }}
+  {{ $key }}: |
+    {{- tpl (toYaml $value) $ | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if .env }}
+  .env: |
+    {{- range $key, $value := .env }}
+    {{ $key }}={{ tpl (toString $value) $ }}
+    {{- end }}
+  {{- end }}
+{{- if .binaryData }}
+binaryData:
+  {{- range $key, $value := .binaryData }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- /*
+ConfigMap template for environment-specific configurations
+
+This template creates a Kubernetes ConfigMap with environment-specific configurations.
+It's designed to be used alongside the main ConfigMap to provide environment overrides.
+
+Usage:
+  - Include this template in your service's Helm chart
+  - Define environment-specific values in your values-{env}.yaml files
+*/}}
+
+{{- define "common.configmap.env" -}}
+{{- $name := include "common.fullname" . -}}
+{{- $labels := include "common.labels" . -}}
+{{- $env := .Values.global.environment | default .Values.environment | default "development" -}}
+{{- with index .Values.environmentConfig $env }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-{{ $env }}
+  labels:
+    {{- $labels | nindent 4 }}
+    "app.kubernetes.io/environment": {{ $env | quote }}
+  annotations:
+    {{- with $.Values.configAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    "app.kubernetes.io/config-version": {{ default "1.0.0" $.Chart.AppVersion | quote }}
+    "app.kubernetes.io/managed-by": {{ $.Release.Service | quote }}
+    "meta.helm.sh/release-name": {{ $.Release.Name | quote }}
+    "meta.helm.sh/release-namespace": {{ $.Release.Namespace | quote }}
+    "config.mca.dollarfunding.com/environment": {{ $env | quote }}
+    {{- if $.Values.configVersioning }}
+    "config.mca.dollarfunding.com/version": {{ $.Values.configVersioning.version | default "1" | quote }}
+    "config.mca.dollarfunding.com/last-updated": {{ now | date "2006-01-02T15:04:05Z07:00" | quote }}
+    {{- end }}
+data:
+  {{- range $key, $value := .data }}
+  {{ $key }}: {{ tpl (toString $value) $ | quote }}
+  {{- end }}
+  {{- if .files }}
+  {{- range $key, $value := .files }}
+  {{ $key }}: |
+    {{- tpl $value $ | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if .json }}
+  {{- range $key, $value := .json }}
+  {{ $key }}: {{ tpl (toJson $value) $ | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .yaml }}
+  {{- range $key, $value := .yaml }}
+  {{ $key }}: |
+    {{- tpl (toYaml $value) $ | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if .env }}
+  .env: |
+    {{- range $key, $value := .env }}
+    {{ $key }}={{ tpl (toString $value) $ }}
+    {{- end }}
+  {{- end }}
+{{- if .binaryData }}
+binaryData:
+  {{- range $key, $value := .binaryData }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- /*
+Example usage in values.yaml:
+
+config:
+  data:
+    APP_NAME: "mca-application"
+    APP_PORT: "3000"
+    LOG_LEVEL: "info"
+  files:
+    "config.json": |
+      {
+        "feature": {
+          "enableNewUI": true,
+          "enableAnalytics": {{ .Values.features.analytics }}
+        }
+      }
+  json:
+    "feature-flags.json": 
+      enableNewUI: true
+      enableAnalytics: {{ .Values.features.analytics }}
+  yaml:
+    "app-config.yaml":
+      app:
+        name: mca-application
+        version: {{ .Chart.AppVersion }}
+      features:
+        enableNewUI: true
+  env:
+    NODE_ENV: {{ .Values.global.environment | default "development" }}
+    APP_NAME: mca-application
+  binaryData:
+    "example.bin": "SGVsbG8gV29ybGQK"
+
+environmentConfig:
+  development:
+    data:
+      LOG_LEVEL: "debug"
+  staging:
+    data:
+      LOG_LEVEL: "info"
+  production:
+    data:
+      LOG_LEVEL: "warn"
+
+configVersioning:
+  version: "1"
+*/}}

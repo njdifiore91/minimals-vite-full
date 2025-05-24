@@ -1,0 +1,376 @@
+# Email Service Deployment Workflow
+# This workflow handles the deployment of the Email Service to Kubernetes environments
+# It supports development, staging, and production deployments with appropriate
+# approval gates, health checks, and rollback procedures.
+
+include:
+  - project: 'infrastructure/ci/templates'
+    file: 'security-scan.yml'
+  - project: 'infrastructure/ci/templates'
+    file: 'notification.yml'
+
+variables:
+  # Service-specific variables
+  SERVICE_NAME: email-service
+  DOCKER_REGISTRY: ${CI_REGISTRY}
+  DOCKER_IMAGE: ${DOCKER_REGISTRY}/${CI_PROJECT_PATH}/${SERVICE_NAME}
+  CHART_PATH: infrastructure/kubernetes/charts/${SERVICE_NAME}
+  
+  # Helm deployment variables
+  HELM_RELEASE_NAME: ${SERVICE_NAME}
+  HELM_TIMEOUT: 5m
+  HELM_ATOMIC: 'true'
+  HELM_DEBUG: 'true'
+  
+  # Environment-specific variables
+  DEV_NAMESPACE: development
+  STAGING_NAMESPACE: staging
+  PROD_NAMESPACE: production
+  
+  # Health check variables
+  HEALTH_CHECK_ENDPOINT: /health
+  HEALTH_CHECK_RETRIES: 5
+  HEALTH_CHECK_DELAY: 10
+  
+  # Rollback variables
+  MAX_ROLLBACK_ATTEMPTS: 3
+  ROLLBACK_WAIT_TIME: 30s
+
+stages:
+  - validate
+  - deploy
+  - verify
+  - rollback
+  - notify
+
+# Reusable job templates
+.kubernetes_setup:
+  before_script:
+    - echo "Setting up Kubernetes connection"
+    - kubectl config use-context ${KUBE_CONTEXT}
+    - kubectl config set-context --current --namespace=${NAMESPACE}
+    - helm version
+    - kubectl version
+
+.helm_deploy:
+  extends: .kubernetes_setup
+  script:
+    - echo "Deploying ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} environment"
+    - |
+      helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_PATH} 
+        --namespace ${NAMESPACE} 
+        --set image.repository=${DOCKER_IMAGE} 
+        --set image.tag=${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}} 
+        --set environment=${CI_ENVIRONMENT_NAME} 
+        --set replicaCount=${REPLICA_COUNT} 
+        --set resources.limits.cpu=${CPU_LIMIT} 
+        --set resources.limits.memory=${MEMORY_LIMIT} 
+        --set resources.requests.cpu=${CPU_REQUEST} 
+        --set resources.requests.memory=${MEMORY_REQUEST} 
+        --set serviceAccount.annotations."eks.amazonaws.com/role-arn"=${IAM_ROLE_ARN} 
+        --set rabbitmq.host=${RABBITMQ_HOST} 
+        --set rabbitmq.port=${RABBITMQ_PORT} 
+        --set rabbitmq.exchange=${RABBITMQ_EXCHANGE} 
+        --set rabbitmq.queue=${RABBITMQ_QUEUE} 
+        --set imap.host=${IMAP_HOST} 
+        --set imap.port=${IMAP_PORT} 
+        --set imap.useTLS=${IMAP_USE_TLS} 
+        --set s3.endpoint=${S3_ENDPOINT} 
+        --set s3.bucket=${S3_BUCKET} 
+        --set s3.region=${S3_REGION} 
+        --timeout ${HELM_TIMEOUT} 
+        --atomic=${HELM_ATOMIC} 
+        --debug=${HELM_DEBUG} 
+        --values ${CHART_PATH}/values.${CI_ENVIRONMENT_NAME}.yaml 
+        ${EXTRA_HELM_ARGS}
+    - echo "Deployment completed successfully"
+
+.health_check:
+  extends: .kubernetes_setup
+  script:
+    - echo "Performing health check for ${SERVICE_NAME}"
+    - |
+      ATTEMPTS=0
+      MAX_ATTEMPTS=${HEALTH_CHECK_RETRIES}
+      DELAY=${HEALTH_CHECK_DELAY}
+      
+      while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS+1))
+        echo "Health check attempt $ATTEMPTS of $MAX_ATTEMPTS"
+        
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get svc ${SERVICE_NAME} -n ${NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "")
+        if [ -z "$SERVICE_IP" ]; then
+          SERVICE_IP=$(kubectl get svc ${SERVICE_NAME} -n ${NAMESPACE} -o jsonpath='{.spec.clusterIP}')
+        fi
+        
+        # Check if pods are ready
+        READY_PODS=$(kubectl get pods -n ${NAMESPACE} -l app.kubernetes.io/name=${SERVICE_NAME} -o jsonpath='{.items[*].status.containerStatuses[0].ready}' | tr ' ' '\n' | grep -c true || echo "0")
+        TOTAL_PODS=$(kubectl get pods -n ${NAMESPACE} -l app.kubernetes.io/name=${SERVICE_NAME} --no-headers | wc -l)
+        
+        if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && [ "$TOTAL_PODS" -gt 0 ]; then
+          # Check health endpoint
+          if kubectl run curl-${CI_JOB_ID} --image=curlimages/curl:7.80.0 -n ${NAMESPACE} --rm --restart=Never -i --timeout=30 -- curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:3000${HEALTH_CHECK_ENDPOINT} | grep -q 200; then
+            echo "Health check passed!"
+            exit 0
+          else
+            echo "Health endpoint check failed, will retry in ${DELAY} seconds"
+          fi
+        else
+          echo "Pods not ready (${READY_PODS}/${TOTAL_PODS}), will retry in ${DELAY} seconds"
+        fi
+        
+        sleep ${DELAY}
+      done
+      
+      echo "Health check failed after ${MAX_ATTEMPTS} attempts"
+      exit 1
+
+.rollback_deployment:
+  extends: .kubernetes_setup
+  stage: rollback
+  when: on_failure
+  script:
+    - echo "Rolling back ${SERVICE_NAME} deployment in ${CI_ENVIRONMENT_NAME} environment"
+    - |
+      ATTEMPTS=0
+      MAX_ATTEMPTS=${MAX_ROLLBACK_ATTEMPTS}
+      WAIT_TIME=${ROLLBACK_WAIT_TIME}
+      
+      while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS+1))
+        echo "Rollback attempt $ATTEMPTS of $MAX_ATTEMPTS"
+        
+        if helm rollback ${HELM_RELEASE_NAME} -n ${NAMESPACE}; then
+          echo "Rollback successful!"
+          exit 0
+        else
+          echo "Rollback failed, will retry in ${WAIT_TIME}"
+          sleep ${WAIT_TIME}
+        fi
+      done
+      
+      echo "Rollback failed after ${MAX_ATTEMPTS} attempts"
+      exit 1
+
+# Validation jobs
+validate_helm_chart:
+  stage: validate
+  script:
+    - echo "Validating Helm chart for ${SERVICE_NAME}"
+    - helm lint ${CHART_PATH}
+    - helm template ${CHART_PATH} --debug
+
+scan_helm_chart:
+  extends: config_scan
+  stage: validate
+  variables:
+    SCAN_TARGET: ${CHART_PATH}
+    FORMAT: "sarif"
+    OUTPUT_FILE: "helm-scan-results.sarif"
+    SEVERITY_THRESHOLD: "HIGH,CRITICAL"
+    EXIT_CODE: "1"
+
+# Deployment jobs
+deploy_to_development:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+    REPLICA_COUNT: 1
+    CPU_LIMIT: "500m"
+    MEMORY_LIMIT: "512Mi"
+    CPU_REQUEST: "100m"
+    MEMORY_REQUEST: "256Mi"
+    IAM_ROLE_ARN: ${DEV_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${DEV_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${DEV_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${DEV_IMAP_HOST}
+    IMAP_PORT: ${DEV_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${DEV_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-development"
+    S3_REGION: ${DEV_S3_REGION}
+  environment:
+    name: development
+    url: https://dev-api.dollarfunding.com/email-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
+
+deploy_to_staging:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+    REPLICA_COUNT: 2
+    CPU_LIMIT: "1000m"
+    MEMORY_LIMIT: "1Gi"
+    CPU_REQUEST: "250m"
+    MEMORY_REQUEST: "512Mi"
+    IAM_ROLE_ARN: ${STAGING_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${STAGING_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${STAGING_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${STAGING_IMAP_HOST}
+    IMAP_PORT: ${STAGING_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${STAGING_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-staging"
+    S3_REGION: ${STAGING_S3_REGION}
+  environment:
+    name: staging
+    url: https://staging-api.dollarfunding.com/email-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+deploy_to_production:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+    REPLICA_COUNT: 3
+    CPU_LIMIT: "2000m"
+    MEMORY_LIMIT: "2Gi"
+    CPU_REQUEST: "500m"
+    MEMORY_REQUEST: "1Gi"
+    IAM_ROLE_ARN: ${PROD_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${PROD_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${PROD_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${PROD_IMAP_HOST}
+    IMAP_PORT: ${PROD_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${PROD_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-production"
+    S3_REGION: ${PROD_S3_REGION}
+  environment:
+    name: production
+    url: https://api.dollarfunding.com/email-service
+  when: manual
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  needs:
+    - job: deploy_to_staging
+      artifacts: false
+
+# Verification jobs
+verify_development_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+  environment:
+    name: development
+  needs:
+    - job: deploy_to_development
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
+
+verify_staging_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+  environment:
+    name: staging
+  needs:
+    - job: deploy_to_staging
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+verify_production_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+  environment:
+    name: production
+  needs:
+    - job: deploy_to_production
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Rollback jobs
+rollback_development:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+  environment:
+    name: development
+  needs:
+    - job: verify_development_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
+
+rollback_staging:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+  environment:
+    name: staging
+  needs:
+    - job: verify_staging_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+rollback_production:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+  environment:
+    name: production
+  needs:
+    - job: verify_production_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Notification jobs
+notify_deployment_success:
+  extends: .notification_template
+  stage: notify
+  variables:
+    NOTIFICATION_TYPE: "deployment_success"
+    NOTIFICATION_SERVICE: ${SERVICE_NAME}
+    NOTIFICATION_ENVIRONMENT: ${CI_ENVIRONMENT_NAME}
+    NOTIFICATION_VERSION: ${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}
+    NOTIFICATION_DETAILS: "Deployment of ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} completed successfully"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "tag" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+notify_deployment_failure:
+  extends: .notification_template
+  stage: notify
+  when: on_failure
+  variables:
+    NOTIFICATION_TYPE: "deployment_failure"
+    NOTIFICATION_SERVICE: ${SERVICE_NAME}
+    NOTIFICATION_ENVIRONMENT: ${CI_ENVIRONMENT_NAME}
+    NOTIFICATION_VERSION: ${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}
+    NOTIFICATION_DETAILS: "Deployment of ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} failed"
+    NOTIFICATION_SEVERITY: "high"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "tag" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/

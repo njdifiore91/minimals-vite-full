@@ -1,0 +1,34 @@
+# Sample Documents .gitignore
+
+# Exclude binary document files from version control to prevent repository bloat
+# These files should be downloaded separately from the secure document storage
+# See README.md for instructions on how to obtain test documents
+
+# Document files
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exceptions - Always include these files
+!README.md
+!**/README.md
+!*.json
+!*.yml
+!*.yaml
+!*.xml
+!*.properties
+
+# Instructions for obtaining test documents:
+# 1. Access the secure document storage at s3://mca-documents-{environment}/test-documents/
+# 2. Download the required test documents to this directory
+# 3. Maintain the same directory structure as defined in metadata.json
+# 4. Do not commit these binary files to the repository

@@ -1,0 +1,205 @@
+# Docker Compose configuration for Kong API Gateway with PostgreSQL and Redis
+# This file sets up a local development environment for the MCA Application Processing System
+# It includes Kong API Gateway 3.5.0, PostgreSQL 14, and Redis 7.0 as specified in the technical requirements
+
+version: '3.8'
+
+# Network configuration for service communication
+networks:
+  kong-net:
+    driver: bridge
+
+# Persistent volumes for data storage
+volumes:
+  kong_data:      # For Kong configuration and plugins
+  postgres_data:  # For PostgreSQL database files
+  redis_data:     # For Redis persistence
+
+services:
+  #############################################
+  # Kong Database: PostgreSQL for Kong config
+  #############################################
+  kong-database:
+    image: postgres:14  # Using PostgreSQL 14 as specified in the technical requirements
+    container_name: kong-database
+    restart: on-failure
+    networks:
+      - kong-net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persistent storage for database files
+    environment:
+      POSTGRES_USER: kong                       # Database user for Kong
+      POSTGRES_PASSWORD: ${KONG_PG_PASSWORD:-kong}  # Password from env var or default to 'kong'
+      POSTGRES_DB: kong                         # Database name for Kong
+    ports:
+      - "5432:5432"  # Expose PostgreSQL port for external tools
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kong"]  # Health check to ensure database is ready
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  #############################################
+  # Kong Database Migrations
+  #############################################
+  kong-migrations:
+    image: kong:3.5.0  # Using Kong 3.5.0 as specified in the technical requirements
+    container_name: kong-migrations
+    command: kong migrations bootstrap  # Initialize the Kong database schema
+    networks:
+      - kong-net
+    restart: on-failure  # Restart only if the container exits with an error
+    environment:
+      # Database connection settings
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: kong-database
+      KONG_PG_PORT: 5432
+      KONG_PG_DATABASE: kong
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD:-kong}
+    depends_on:
+      kong-database:
+        condition: service_healthy  # Wait for database to be ready before running migrations
+
+  #############################################
+  # Redis: For rate limiting and caching
+  #############################################
+  kong-redis:
+    image: redis:7.0  # Using Redis 7.0 as specified in the technical requirements
+    container_name: kong-redis
+    restart: on-failure
+    networks:
+      - kong-net
+    volumes:
+      - redis_data:/data  # Persistent storage for Redis data
+    ports:
+      - "6379:6379"  # Expose Redis port for external tools
+    command: redis-server --requirepass ${REDIS_PASSWORD:-kong} --appendonly yes  # Enable persistence
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]  # Health check to ensure Redis is responsive
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  #############################################
+  # Kong API Gateway
+  #############################################
+  kong:
+    image: kong:3.5.0  # Using Kong 3.5.0 as specified in the technical requirements
+    container_name: kong
+    restart: on-failure
+    networks:
+      - kong-net
+    volumes:
+      - kong_data:/usr/local/kong  # Persistent storage for Kong data
+      - ./config:/etc/kong/config  # Mount configuration directory
+    environment:
+      # Database settings
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: kong-database
+      KONG_PG_PORT: 5432
+      KONG_PG_DATABASE: kong
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD:-kong}
+      
+      # Redis settings for rate limiting and caching
+      KONG_REDIS_HOST: kong-redis
+      KONG_REDIS_PORT: 6379
+      KONG_REDIS_PASSWORD: ${REDIS_PASSWORD:-kong}
+      
+      # Log settings - direct logs to stdout/stderr for container logging
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      
+      # Admin API settings - expose both HTTP and HTTPS endpoints
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
+      
+      # Proxy settings - expose both HTTP and HTTPS endpoints
+      KONG_PROXY_LISTEN: 0.0.0.0:8000, 0.0.0.0:8443 ssl
+      
+      # Enable required plugins as specified in the technical requirements
+      # - JWT verification for all authenticated endpoints
+      # - Rate limiting with Redis backend for distributed enforcement
+      # - Request/response transformation for consistent formats
+      # - IP restriction for admin API access
+      # - CORS for cross-origin requests
+      KONG_PLUGINS: bundled,rate-limiting,jwt,cors,request-transformer,response-transformer,ip-restriction
+    ports:
+      - "8000:8000" # Proxy HTTP
+      - "8443:8443" # Proxy HTTPS
+      - "8001:8001" # Admin API HTTP
+      - "8444:8444" # Admin API HTTPS
+    healthcheck:
+      test: ["CMD", "kong", "health"]  # Health check to ensure Kong is running properly
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      kong-migrations:
+        condition: service_completed_successfully  # Wait for migrations to complete
+      kong-redis:
+        condition: service_healthy  # Wait for Redis to be ready
+
+  #############################################
+  # Kong Manager (Optional UI for Kong)
+  #############################################
+  # Uncomment to enable Kong Manager UI for development purposes
+  # This provides a web interface for managing Kong configurations
+  # Note: For production, use Kong's official Kong Manager or declarative configuration
+  # 
+  # kong-manager:
+  #   image: pantsel/konga:latest
+  #   container_name: kong-manager
+  #   restart: on-failure
+  #   networks:
+  #     - kong-net
+  #   environment:
+  #     NODE_ENV: production
+  #     DB_ADAPTER: postgres
+  #     DB_HOST: kong-database
+  #     DB_PORT: 5432
+  #     DB_USER: kong
+  #     DB_PASSWORD: ${KONG_PG_PASSWORD:-kong}
+  #     DB_DATABASE: kong
+  #     KONGA_HOOK_TIMEOUT: 120000
+  #     KONGA_LOG_LEVEL: debug
+  #   ports:
+  #     - "1337:1337"
+  #   depends_on:
+  #     kong-database:
+  #       condition: service_healthy
+  #     kong:
+  #       condition: service_healthy
+
+#############################################
+# Usage Instructions:
+#############################################
+# To start the API Gateway stack:
+#   docker-compose up -d
+#
+# To check the status of all services:
+#   docker-compose ps
+#
+# To view logs from all services:
+#   docker-compose logs -f
+#
+# To view logs from a specific service (e.g., kong):
+#   docker-compose logs -f kong
+#
+# To stop all services:
+#   docker-compose down
+#
+# To stop all services and remove volumes:
+#   docker-compose down -v
+#
+# Environment Variables:
+#   KONG_PG_PASSWORD - Password for the Kong PostgreSQL user (default: kong)
+#   REDIS_PASSWORD - Password for Redis (default: kong)
+#
+# Access the Kong Admin API at:
+#   http://localhost:8001
+#
+# Access the Kong Proxy at:
+#   http://localhost:8000

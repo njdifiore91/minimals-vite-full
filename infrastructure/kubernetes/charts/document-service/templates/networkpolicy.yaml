@@ -1,0 +1,205 @@
+{{- /*
+networkpolicy.yaml for Document Service
+
+This template extends the common networkpolicy template with Document Service specific
+network rules, including ingress and egress policies for RabbitMQ and S3 connections.
+
+This NetworkPolicy implements the security requirements specified in the MCA Application
+Processing System technical specification, including:
+- Network isolation for the Document Service
+- Secure communication with RabbitMQ message broker
+- Secure access to S3-compatible storage
+- Defense-in-depth approach for container security
+
+The Document Service requires the following network communication paths:
+- Ingress: Receive traffic from API Gateway
+- Egress: Send messages to RabbitMQ
+- Egress: Access S3-compatible storage for document storage
+- Egress: DNS resolution (kube-dns)
+*/}}
+
+{{- $fullName := include "common.fullname" . -}}
+
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # Pod selector determines which pods this NetworkPolicy applies to
+  # This selects all pods with the document-service app label
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: document-service
+  
+  # Policy types can be Ingress, Egress, or both
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # Ingress rules control incoming traffic to the Document Service pods
+  ingress:
+    # Allow traffic from API Gateway
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: 5000
+    
+    # Allow traffic from Email Service (which sends documents for classification)
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: email-service
+      ports:
+      - protocol: TCP
+        port: 5000
+  
+  # Egress rules control outgoing traffic from the Document Service pods
+  egress:
+    # Allow traffic to RabbitMQ for message processing
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # RabbitMQ AMQP port
+      - protocol: TCP
+        port: 15672 # RabbitMQ management port
+    
+    # Allow traffic to S3-compatible storage for document storage
+    # Using ipBlock for external S3 service
+    - to:
+      - ipBlock:
+          # This CIDR should be replaced with the actual S3 service IP range in values.yaml
+          cidr: {{ .Values.networkPolicy.s3StorageCIDR | default "0.0.0.0/0" }}
+          # Exclude internal cluster IPs to ensure this only applies to external traffic
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS port for S3 API
+    
+    # Allow traffic to OCR Service for document processing pipeline
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: ocr-service
+      ports:
+      - protocol: TCP
+        port: 5000  # OCR Service API port
+    
+    # Allow DNS traffic (required for service discovery)
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+{{- end }}
+
+{{- /*
+Create a policy to allow specific microservices to communicate with the Document Service
+
+This implements the microservice communication patterns specified in the technical
+specification. It allows for fine-grained control over which services can communicate
+with the Document Service, based on namespace and pod selectors.
+
+As described in section 0.1.3 of the technical specification, the MCA Application
+Processing System consists of multiple microservices that need to communicate with
+each other in specific ways. This policy allows for implementing those communication
+patterns securely.
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.allowedServices }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullName }}-service-communication
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: document-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from specified services
+    {{- range .Values.networkPolicy.allowedServices }}
+    - from:
+      {{- if .namespaceSelector }}
+      - namespaceSelector:
+          {{- toYaml .namespaceSelector | nindent 10 }}
+        {{- if .podSelector }}
+        podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+        {{- end }}
+      {{- else if .podSelector }}
+      - podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+      {{- end }}
+      {{- if .ports }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  egress:
+    # Allow traffic to specified services
+    {{- range .Values.networkPolicy.allowedServices }}
+    - to:
+      {{- if .namespaceSelector }}
+      - namespaceSelector:
+          {{- toYaml .namespaceSelector | nindent 10 }}
+        {{- if .podSelector }}
+        podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+        {{- end }}
+      {{- else if .podSelector }}
+      - podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+      {{- end }}
+      {{- if .ports }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- /*
+This NetworkPolicy template implements the security requirements specified in the
+MCA Application Processing System technical specification for the Document Service.
+
+It provides secure network isolation for the Document Service while allowing necessary
+communication with other services in the system, such as RabbitMQ for message processing
+and S3-compatible storage for document storage.
+
+The template follows the defense-in-depth approach to security as specified in the
+technical specification, with fine-grained control over both ingress and egress traffic.
+
+This template should be used in conjunction with other security measures, such as
+TLS encryption, secure credential storage, and proper authentication mechanisms,
+to ensure comprehensive security for the Document Service.
+*/}}

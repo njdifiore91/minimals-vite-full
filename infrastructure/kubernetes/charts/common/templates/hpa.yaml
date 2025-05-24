@@ -1,0 +1,132 @@
+{{- /*
+HorizontalPodAutoscaler template for MCA Application Processing System microservices.
+
+This template defines a Kubernetes HorizontalPodAutoscaler (HPA) that can be used by all
+microservices in the MCA Application Processing System. It supports CPU and memory-based
+scaling metrics, with the option to add custom metrics when available. It also implements
+proper scaling behavior with stabilization windows and policies to ensure stable scaling.
+
+Key features:
+- CPU and memory-based scaling metrics
+- Support for custom metrics
+- Environment-specific scaling configurations
+- Configurable scaling behavior with stabilization windows
+- Support for different scaling policies for scale up and scale down
+
+Usage:
+- Include this template in your service's templates directory
+- Configure autoscaling settings in your service's values.yaml file
+
+Example values.yaml configuration:
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  includeMemoryMetric: true
+  targetMemoryUtilizationPercentage: 80
+  customMetrics:
+    - type: Pods
+      pods:
+        metric:
+          name: rabbitmq_queue_messages
+        target:
+          type: AverageValue
+          averageValue: 100
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+*/ -}}
+
+{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    {{- if .Values.autoscaling.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.labels "context" $) | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- if .Values.autoscaling.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+    kubernetes.io/description: "HPA for {{ include "common.names.name" . }} service"
+    {{- if eq .Release.Namespace "production" }}
+    monitoring.dollarfunding.com/priority: "high"
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default (include "common.names.fullname" .) }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 5 }}
+  metrics:
+    # CPU utilization metric - default scaling metric
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 80 }}
+    {{- if .Values.autoscaling.includeMemoryMetric }}
+    # Memory utilization metric - optional based on service requirements
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+    {{- end }}
+    {{- if .Values.autoscaling.customMetrics }}
+    # Custom metrics - service-specific metrics (e.g., queue length, processing time)
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.customMetrics "context" $) | nindent 4 }}
+    {{- end }}
+  {{- if .Values.autoscaling.behavior }}
+  # Scaling behavior - configurable per service
+  behavior:
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.behavior "context" $) | nindent 4 }}
+  {{- else }}
+  # Default scaling behavior optimized for microservices
+  behavior:
+    scaleDown:
+      # Moderate stabilization window to prevent flapping
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationWindowSeconds | default 300 }}
+      policies:
+      # Scale down conservatively - 10% of current replicas per minute
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleDownPercentage | default 10 }}
+        periodSeconds: 60
+      # Never scale down by more than 2 pods at a time
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleDownPods | default 2 }}
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # Short stabilization window for scaling up to ensure quick response to load
+      # This helps maintain the 5-minute processing SLA mentioned in section 0.2.6
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationWindowSeconds | default 0 }}
+      policies:
+      # Scale up by at most 100% of current replicas per minute
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleUpPercentage | default 100 }}
+        periodSeconds: 60
+      # But never scale up by more than 4 pods per minute
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleUpPods | default 4 }}
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
+  {{- end }}
+{{- end }}

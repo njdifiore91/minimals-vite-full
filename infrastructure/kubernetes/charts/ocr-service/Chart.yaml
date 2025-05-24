@@ -1,0 +1,27 @@
+apiVersion: v2
+name: ocr-service
+description: GPU-accelerated OCR service for the MCA Application Processing System that extracts data from documents using Python/TensorFlow with 99% accuracy. Processes both typed and handwritten documents as part of the document processing pipeline.
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+
+# Keywords for chart categorization and searchability
+keywords:
+  - ocr
+  - tensorflow
+  - gpu
+  - document-processing
+  - machine-learning
+  - data-extraction
+
+# Maintainer information
+maintainers:
+  - name: Dollar Funding DevOps Team
+    email: devops@dollarfunding.com
+    url: https://dollarfunding.com
+
+# Dependencies
+dependencies:
+  - name: common
+    version: 0.1.0
+    repository: file://../common

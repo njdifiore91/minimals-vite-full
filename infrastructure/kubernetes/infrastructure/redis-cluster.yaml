@@ -1,0 +1,261 @@
+---
+# Redis Cluster Definition for MCA Application Processing System
+# This manifest creates a Redis 7.0 cluster with appropriate high availability,
+# persistence, and memory optimization settings for the MCA application.
+
+# Application Cache - 15 minute TTL for application data
+apiVersion: redis.opstreelabs.in/v1beta1
+kind: Redis
+metadata:
+  name: mca-app-cache
+  namespace: mca-system
+  labels:
+    app: mca-redis
+    component: app-cache
+    part-of: mca-application
+    ttl: "15m"
+spec:
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 300m
+        memory: 1Gi
+      limits:
+        cpu: 500m
+        memory: 1.5Gi
+    serviceType: ClusterIP
+  
+  # Redis configuration
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.43.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    env:
+      - name: REDIS_EXPORTER_INCL_SYSTEM_METRICS
+        value: "true"
+  
+  # Persistence configuration
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: standard
+  
+  # Redis configuration for application cache (15 minute TTL)
+  redisConfig:
+    additionalRedisConfig: |
+      # TTL settings - 15 minutes (900 seconds) for application data
+      databases 16
+      maxmemory 1024mb
+      maxmemory-policy allkeys-lru
+      
+      # Default TTL for keys (15 minutes)
+      maxmemory-samples 5
+      
+      # AOF persistence for critical data
+      appendonly yes
+      appendfsync everysec
+      
+      # Security settings
+      protected-mode yes
+      
+      # Performance tuning
+      tcp-keepalive 300
+      timeout 0
+  
+  # Security context
+  securityContext:
+    runAsUser: 999
+    fsGroup: 999
+  
+  # Affinity for pod scheduling
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - mca-redis
+          topologyKey: kubernetes.io/hostname
+  
+  # Prometheus annotations for monitoring
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    redis.opstreelabs.in/ttl: "15m"
+
+---
+# Session Cache - 24 hour TTL for user sessions
+apiVersion: redis.opstreelabs.in/v1beta1
+kind: Redis
+metadata:
+  name: mca-session-cache
+  namespace: mca-system
+  labels:
+    app: mca-redis
+    component: session-cache
+    part-of: mca-application
+    ttl: "24h"
+spec:
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 400m
+        memory: 1Gi
+    serviceType: ClusterIP
+  
+  # Redis configuration
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.43.0
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    env:
+      - name: REDIS_EXPORTER_INCL_SYSTEM_METRICS
+        value: "true"
+  
+  # Persistence configuration
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: standard
+  
+  # Redis configuration for session cache (24 hour TTL)
+  redisConfig:
+    additionalRedisConfig: |
+      # TTL settings - 24 hours (86400 seconds) for user sessions
+      databases 16
+      maxmemory 512mb
+      maxmemory-policy noeviction
+      
+      # Default TTL for keys (24 hours)
+      maxmemory-samples 5
+      
+      # AOF persistence for critical data
+      appendonly yes
+      appendfsync everysec
+      
+      # Security settings
+      protected-mode yes
+      
+      # Performance tuning
+      tcp-keepalive 300
+      timeout 0
+  
+  # Security context
+  securityContext:
+    runAsUser: 999
+    fsGroup: 999
+  
+  # Affinity for pod scheduling
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - mca-redis
+          topologyKey: kubernetes.io/hostname
+  
+  # Prometheus annotations for monitoring
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    redis.opstreelabs.in/ttl: "24h"
+
+---
+# Redis Sentinel Configuration for High Availability
+apiVersion: redis.opstreelabs.in/v1beta1
+kind: RedisSentinel
+metadata:
+  name: mca-redis-sentinel
+  namespace: mca-system
+  labels:
+    app: mca-redis
+    component: sentinel
+    part-of: mca-application
+spec:
+  # Sentinel configuration
+  sentinelConfig:
+    replicas: 3
+    quorum: 2
+    downAfterMilliseconds: 15000  # 15 seconds for failover detection
+    failoverTimeout: 60000         # 60 seconds for failover process
+    parallelSyncs: 1
+    monitors:
+      - name: mca-app-cache
+        namespace: mca-system
+      - name: mca-session-cache
+        namespace: mca-system
+  
+  # Kubernetes configuration
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+    serviceType: ClusterIP
+  
+  # Security context
+  securityContext:
+    runAsUser: 999
+    fsGroup: 999
+  
+  # Affinity for pod scheduling
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - mca-redis
+          topologyKey: kubernetes.io/hostname
+  
+  # Prometheus annotations for monitoring
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"

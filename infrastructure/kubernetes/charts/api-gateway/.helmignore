@@ -1,0 +1,91 @@
+# Patterns to ignore when building packages.
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+
+# OS generated files
+.DS_Store
+*.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Common VCS dirs
+.git/
+.gitignore
+.gitattributes
+.github/
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+
+# Common backup files
+*.swp
+*.bak
+*.tmp
+*~
+*.orig
+*.rej
+
+# Various IDEs and editors
+.project
+.idea/
+*.tmproj
+.vscode/
+*.sublime-*
+.settings/
+.classpath
+*.iml
+.factorypath
+
+# CI/CD configuration files
+.travis.yml
+.drone.yml
+.gitlab-ci.yml
+.circleci/
+Jenkinsfile
+azure-pipelines.yml
+.github/workflows/
+
+# Documentation files
+*.md
+docs/
+README*
+LICENSE*
+CHANGELOG*
+CONTRIBUTING*
+OWNERS
+MAINTAINERS
+CODE_OF_CONDUCT*
+
+# Build and package files
+node_modules/
+dist/
+build/
+target/
+*.log
+*.tar.gz
+*.tgz
+*.zip
+*.jar
+*.war
+*.ear
+
+# Test files
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*
+
+# Miscellaneous
+*.env
+*.env.*
+.env.*
+secrets.yaml
+values.*.yaml
+!values.yaml
+charts/*.tgz

@@ -1,0 +1,62 @@
+{{- /*
+service.yaml: Kubernetes Service for the Notification Service
+
+This template creates a Kubernetes Service resource to expose the Notification Service within the cluster.
+It configures the service port, type, and selectors to enable other services to communicate with the
+Notification Service API endpoints for webhook configuration and management.
+
+Key features:
+- Exposes port 3000 for the Node.js notification service
+- Uses ClusterIP type for internal cluster access
+- Configures selector to match notification-service deployment labels
+- Supports annotations for service discovery if needed
+- Configures session affinity for webhook delivery consistency
+*/}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: notification-service
+    {{- if .Values.service.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
+    {{- end }}
+  {{- if .Values.service.annotations }}
+  annotations:
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- else }}
+  # Enable session affinity for consistent webhook delivery
+  sessionAffinity: ClientIP
+  {{- end }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.sessionAffinityConfig "context" $) | nindent 4 }}
+  {{- else }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port | default 3000 }}
+      targetPort: {{ .Values.service.targetPort | default .Values.service.port | default 3000 }}
+      protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "common.labels.matchLabels" . | nindent 4 }}
+    app.kubernetes.io/component: notification-service
+    {{- if .Values.service.selector }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
+    {{- end }}

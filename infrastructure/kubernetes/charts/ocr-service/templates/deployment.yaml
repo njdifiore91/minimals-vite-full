@@ -1,0 +1,79 @@
+{{- /*
+OCR Service Deployment Template
+
+This template extends the common deployment template with OCR Service specific configurations.
+The OCR Service is a Python microservice using TensorFlow for OCR processing with GPU acceleration.
+
+Key features:
+- Python/TensorFlow container image
+- GPU resources with NVIDIA runtime (minimum 8GB VRAM)
+- Environment variables from ConfigMaps and Secrets
+- Liveness and readiness probes for health monitoring
+- Security context with non-root user
+*/}}
+
+{{- $serviceType := "python" }}
+
+{{- $values := deepCopy . }}
+{{- $_ := set $values "Values" (deepCopy .Values) }}
+{{- $_ := set $values.Values "serviceType" $serviceType }}
+
+{{- if .Values.deployment }}
+{{- if not .Values.deployment.annotations }}
+{{- $_ := set $values.Values.deployment "annotations" dict }}
+{{- end }}
+{{- else }}
+{{- $_ := set $values.Values "deployment" dict }}
+{{- $_ := set $values.Values.deployment "annotations" dict }}
+{{- end }}
+
+{{/* Add OCR Service specific annotations */}}
+{{- $_ := set $values.Values.deployment.annotations "ocr-service/tensorflow-version" "2.15.0" }}
+{{- $_ := set $values.Values.deployment.annotations "ocr-service/gpu-enabled" "true" }}
+{{- $_ := set $values.Values.deployment.annotations "ocr-service/min-vram" "8GB" }}
+
+{{/* Add OCR Service specific labels if needed */}}
+{{- if not $values.Values.podLabels }}
+{{- $_ := set $values.Values "podLabels" dict }}
+{{- end }}
+{{- $_ := set $values.Values.podLabels "app.kubernetes.io/component" "ocr-processor" }}
+{{- $_ := set $values.Values.podLabels "app.kubernetes.io/part-of" "mca-document-processing" }}
+
+{{/* Ensure proper resource configuration for GPU */}}
+{{- if not $values.Values.resources }}
+{{- $_ := set $values.Values "resources" dict }}
+{{- $_ := set $values.Values.resources "limits" dict }}
+{{- $_ := set $values.Values.resources "requests" dict }}
+{{- end }}
+
+{{/* Set minimum GPU resource requirements if not specified */}}
+{{- if not $values.Values.resources.limits.gpu }}
+{{- $_ := set $values.Values.resources.limits "gpu" 1 }}
+{{- end }}
+{{- if not $values.Values.resources.requests.gpu }}
+{{- $_ := set $values.Values.resources.requests "gpu" 1 }}
+{{- end }}
+
+{{/* Configure environment-specific settings */}}
+{{- if eq .Release.Namespace "development" }}
+{{- with .Values.development }}
+{{- if .resources }}
+{{- $_ := set $values.Values "resources" .resources }}
+{{- end }}
+{{- end }}
+{{- else if eq .Release.Namespace "staging" }}
+{{- with .Values.staging }}
+{{- if .resources }}
+{{- $_ := set $values.Values "resources" .resources }}
+{{- end }}
+{{- end }}
+{{- else if eq .Release.Namespace "production" }}
+{{- with .Values.production }}
+{{- if .resources }}
+{{- $_ := set $values.Values "resources" .resources }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/* Include the common deployment template with our customized values */}}
+{{- include "common.deployment" $values }}

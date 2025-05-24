@@ -1,0 +1,122 @@
+{{- /*
+service.yaml: A reusable Kubernetes Service template for MCA Application Processing System microservices
+
+This template creates a Kubernetes Service resource to expose microservices within the cluster or externally.
+It supports different service types (ClusterIP, NodePort, LoadBalancer) and includes proper port configurations.
+
+This template is used by all microservices in the MCA Application Processing System to ensure consistent
+service definitions and enable proper service interactions and data flows as specified in section 0.1.3.
+
+Key features:
+- Support for different service types (ClusterIP, NodePort, LoadBalancer)
+- Parameterized port configurations for HTTP, metrics, and custom ports
+- Consistent selector using helper functions
+- Support for service annotations for cloud provider integrations
+- Session affinity options for stateful services
+
+Usage:
+  - Include this template in your service's Helm chart
+  - Configure service-specific values in your values.yaml file
+  - Override default values as needed for each service
+
+Example values.yaml configuration:
+```yaml
+service:
+  enabled: true
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+  sessionAffinity: None
+  sessionAffinityConfig: {}
+  externalTrafficPolicy: Cluster
+  clusterIP: ""
+```
+*/}}
+
+{{- if .Values.service.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    {{- if .Values.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.labels "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.service.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.service.annotations .Values.annotations }}
+  annotations:
+    {{- if .Values.service.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.annotations "context" $) | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and .Values.service.clusterIP (eq .Values.service.type "ClusterIP") }}
+  clusterIP: {{ .Values.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.sessionAffinityConfig "context" $) | nindent 4 }}
+  {{- end }}
+  {{- if or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy | default "Cluster" }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- range .Values.service.loadBalancerSourceRanges }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  ports:
+    {{- if .Values.service.ports }}
+    {{- range .Values.service.ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .targetPort | default .port }}
+      {{- if and (eq $.Values.service.type "NodePort") .nodePort }}
+      nodePort: {{ .nodePort }}
+      {{- end }}
+      protocol: {{ .protocol | default "TCP" }}
+    {{- end }}
+    {{- else if .Values.service.port }}
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort | default .Values.service.port }}
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+      protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+    {{- end }}
+    {{- end }}
+  selector:
+    {{- include "common.labels.matchLabels" . | nindent 4 }}
+    {{- if .Values.service.selector }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
+    {{- end }}
+{{- end }}

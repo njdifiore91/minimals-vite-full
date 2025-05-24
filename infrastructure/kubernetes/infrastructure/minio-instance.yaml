@@ -1,0 +1,288 @@
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: mca-storage
+  namespace: mca-storage
+  labels:
+    app: mca-application-processing
+    component: storage
+spec:
+  # High availability configuration with 4 replicas
+  replicas: 4
+  # Request 4 CPU cores and 16Gi RAM for production workload
+  resources:
+    requests:
+      cpu: 4
+      memory: 16Gi
+    limits:
+      cpu: 8
+      memory: 32Gi
+  # Enable automatic TLS certificate generation
+  requestAutoCert: true
+  # Configure TLS certificate settings
+  certConfig:
+    commonName: "*.mca-storage.svc.cluster.local"
+    organizationName: "Dollar Funding"
+    dnsNames:
+      - "minio.mca-storage.svc.cluster.local"
+      - "*.mca-storage.svc.cluster.local"
+  # Configure MinIO server with 4 pools for high availability
+  pools:
+    - name: pool-0
+      servers: 4
+      volumesPerServer: 4
+      volumeClaimTemplate:
+        metadata:
+          name: data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Ti
+          # Use storage class that supports encryption
+          storageClassName: mca-encrypted-storage
+  # Configure S3 API settings
+  s3:
+    bucketDNS: false
+  # Enable encryption for data at rest
+  env:
+    - name: MINIO_KMS_KES_CERT_FILE
+      value: "/etc/minio/certs/kes.crt"
+    - name: MINIO_KMS_KES_KEY_FILE
+      value: "/etc/minio/certs/kes.key"
+    - name: MINIO_KMS_KES_ENDPOINT
+      value: "https://kes.mca-storage.svc.cluster.local:7373"
+    - name: MINIO_KMS_KES_KEY_NAME
+      value: "mca-encryption-key"
+    # Enable AES-256 encryption for all objects
+    - name: MINIO_KMS_AUTO_ENCRYPTION
+      value: "on"
+    # Configure secure TLS settings
+    - name: MINIO_BROWSER_REDIRECT_URL
+      value: "https://minio-console.mca-storage.svc.cluster.local"
+    # Configure secure API access
+    - name: MINIO_API_REQUESTS_MAX
+      value: "1000"
+    # Configure secure connection settings
+    - name: MINIO_COMPRESSION_ENABLE
+      value: "on"
+    # Configure secure access logging
+    - name: MINIO_AUDIT_WEBHOOK_ENABLE
+      value: "on"
+    - name: MINIO_AUDIT_WEBHOOK_ENDPOINT
+      value: "http://notification-service.mca-system.svc.cluster.local:8080/audit"
+    # Configure secure authentication
+    - name: MINIO_IDENTITY_OPENID_CONFIG_URL
+      value: "https://api-gateway.mca-system.svc.cluster.local/.well-known/openid-configuration"
+    - name: MINIO_IDENTITY_OPENID_CLIENT_ID
+      value: "minio-storage"
+    # Configure secure storage settings
+    - name: MINIO_STORAGE_CLASS_STANDARD
+      value: "EC:4"
+    - name: MINIO_STORAGE_CLASS_RRS
+      value: "EC:2"
+  # Configure Key Encryption Service for AES-256 encryption
+  kes:
+    replicas: 2
+    image: minio/kes:latest
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+    resources:
+      requests:
+        cpu: 1
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+    # Configure KES to use Kubernetes secrets for key management
+    configuration:
+      # Define the KES server configuration
+      server:
+        address: "0.0.0.0:7373"
+        root: "disabled"
+        tls:
+          cert: "/etc/kes/certs/server.crt"
+          key: "/etc/kes/certs/server.key"
+          ca: "/etc/kes/certs/ca.crt"
+      # Define the log configuration
+      log:
+        error: "on"
+        audit: "on"
+      # Define the policy configuration
+      policy:
+        minio-policy:
+          paths:
+            - "/v1/key/create/*"
+            - "/v1/key/generate/*"
+            - "/v1/key/decrypt/*"
+            - "/v1/key/encrypt/*"
+          identities:
+            - "${MINIO_IDENTITY}"
+      # Define the keystore configuration for AES-256 encryption
+      keystore:
+        kubernetes:
+          namespace: "mca-storage"
+          secretPrefix: "kes-"
+          annotations:
+            - "mca-application-processing"
+      # Define the keys to be managed by KES
+      keys:
+        - name: mca-encryption-key
+          type: "aes-256"
+  # Configure buckets to be created automatically
+  buckets:
+    - name: mca-documents-production
+      objectLock: false
+      versioning: true
+      purge: false
+      region: "us-east-1"
+      # Configure lifecycle policies for production bucket
+      lifecycle:
+        - id: "expire-old-versions"
+          status: "Enabled"
+          expiration:
+            days: 365
+          noncurrentVersionExpiration:
+            noncurrentDays: 90
+          filter:
+            prefix: ""
+        - id: "delete-expired-delete-markers"
+          status: "Enabled"
+          expiredObjectDeleteMarker: true
+          filter:
+            prefix: ""
+      # Configure encryption settings for production bucket with AES-256 as specified in the technical specification
+      encryption:
+        algorithm: "AES256"
+        # Use server-side encryption with KMS managed keys
+        sseAlgorithm: "aws:kms"
+        kmsMasterKeyID: "mca-encryption-key"
+      # Configure access controls for production bucket
+      policy: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": ["s3:GetObject"],
+              "Resource": ["arn:aws:s3:::mca-documents-production/*"],
+              "Condition": {"IpAddress": {"aws:SourceIp": ["10.0.0.0/8"]}}
+            }
+          ]
+        }
+    - name: mca-documents-staging
+      objectLock: false
+      versioning: true
+      purge: false
+      region: "us-east-1"
+      # Configure lifecycle policies for staging bucket
+      lifecycle:
+        - id: "expire-old-versions"
+          status: "Enabled"
+          expiration:
+            days: 180
+          noncurrentVersionExpiration:
+            noncurrentDays: 30
+          filter:
+            prefix: ""
+        - id: "delete-expired-delete-markers"
+          status: "Enabled"
+          expiredObjectDeleteMarker: true
+          filter:
+            prefix: ""
+      # Configure encryption settings for staging bucket with AES-256 as specified in the technical specification
+      encryption:
+        algorithm: "AES256"
+        # Use server-side encryption with KMS managed keys
+        sseAlgorithm: "aws:kms"
+        kmsMasterKeyID: "mca-encryption-key"
+      # Configure access controls for staging bucket
+      policy: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": ["s3:GetObject"],
+              "Resource": ["arn:aws:s3:::mca-documents-staging/*"],
+              "Condition": {"IpAddress": {"aws:SourceIp": ["10.0.0.0/8"]}}
+            }
+          ]
+        }
+  # Configure pod security context
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  # Configure liveness and readiness probes
+  liveness:
+    initialDelaySeconds: 120
+    periodSeconds: 60
+  readiness:
+    initialDelaySeconds: 120
+    periodSeconds: 60
+  # Configure pod anti-affinity to ensure high availability
+  podManagementPolicy: Parallel
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - mca-storage
+          topologyKey: "kubernetes.io/hostname"
+  # Configure prometheus monitoring
+  prometheus:
+    expose: true
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/path: "/minio/v2/metrics/cluster"
+      prometheus.io/port: "9000"
+  # Configure service settings for secure access as specified in the technical specification
+  serviceMetadata:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-east-1:123456789012:certificate/abcdef12-3456-7890-abcd-ef1234567890"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+      # Add annotations for monitoring and observability
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9000"
+      # Add annotations for security
+      security.alpha.kubernetes.io/sysctls: "net.ipv4.ip_local_port_range=1024 65535"
+  # Configure external service for access from outside the cluster
+  externalCertSecret:
+    name: "minio-external-cert"
+    type: "kubernetes.io/tls"
+  # Configure network policies
+  networkPolicy:
+    allowExternal: true
+    allowedNamespaces:
+      - "mca-system"
+      - "mca-application"
+  # Configure pod disruption budget for high availability
+  podDisruptionBudget:
+    maxUnavailable: 1
+  # Configure priority class for pod scheduling
+  priorityClassName: "high-priority"
+  # Configure update strategy
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  # Configure node selector for placement
+  nodeSelector:
+    storage-type: "ssd"
+    kubernetes.io/os: "linux"
+  # Configure tolerations for node taints
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "storage"
+      effect: "NoSchedule"

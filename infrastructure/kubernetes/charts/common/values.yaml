@@ -1,0 +1,479 @@
+# Common Helm Chart Values for MCA Application Processing System
+# This file provides default configuration values that are used across all service charts
+# Service-specific charts can override these values as needed
+#
+# This common values file ensures consistent configuration across all microservices
+# in the MCA Application Processing System, implementing the requirements specified
+# in sections 8.5.4 (Kubernetes Orchestration) and 8.2.2 (Environment Management).
+#
+# Key features:
+# - Resource limits and requests to prevent resource contention
+# - Liveness and readiness probes for self-healing services
+# - Security contexts for non-root users and read-only filesystem
+# - Consistent labels and annotations across all resources
+# - Environment-specific overrides for development, staging, and production
+# - Network policies for service isolation
+# - Metrics configuration for monitoring
+#
+# Usage:
+# This file is used as a dependency in all service-specific Helm charts.
+# Service-specific values should override these defaults as needed.
+
+# Global settings that apply to all templates
+global:
+  # Environment setting: "production", "staging", or "development"
+  environment: "production"
+  # Application name for labels and selectors
+  applicationName: "mca-application-processing"
+  # Domain for ingress resources
+  domain: "dollarfunding.com"
+  # Enable TLS for all services
+  tls: true
+  # TLS version and cipher suites as specified in section 3.8.3
+  tlsVersion: "TLSv1.3"
+  # Default timeout settings
+  timeouts:
+    # Default connection timeout in seconds
+    connection: 30
+    # Default read timeout in seconds
+    read: 30
+    # Default write timeout in seconds
+    write: 30
+  # Default security settings
+  security:
+    # JWT authentication parameters as specified in section 0.1.3
+    jwt:
+      algorithm: "RS256"
+      tokenExpiry: 3600  # 60 minutes in seconds
+      refreshTokenExpiry: 604800  # 7 days in seconds
+
+# Default image configuration
+image:
+  # Default pull policy as specified in section 8.5.4
+  pullPolicy: IfNotPresent
+  # Pull secrets if using private registry
+  pullSecrets: []
+  # Default registry
+  registry: "docker.io"
+
+# Service-specific image configurations
+imageConfigs:
+  # Node.js services as specified in section 8.5.1
+  nodejs:
+    repository: "node"
+    tag: "20-alpine"
+  # Java services as specified in section 8.5.1
+  java:
+    repository: "openjdk"
+    tag: "17-slim"
+  # Python services as specified in section 8.5.1
+  python:
+    repository: "python"
+    tag: "3.9-slim"
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod security context
+# Non-root users as specified in section 8.5.4 for defense-in-depth approach
+podSecurityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+
+# Container security context
+# Read-only filesystem as specified in section 8.5.4 for defense-in-depth approach
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service configuration
+service:
+  # Default service type
+  type: ClusterIP
+  # Default port (should be overridden by specific services)
+  port: 80
+  # Annotations for the service
+  annotations: {}
+  # Session affinity
+  sessionAffinity: None
+  # Session affinity config
+  sessionAffinityConfig: {}
+
+# Ingress configuration
+ingress:
+  # Enable ingress by default
+  enabled: true
+  # Default annotations for ingress
+  annotations:
+    kubernetes.io/ingress.class: "kong"
+    konghq.com/strip-path: "true"
+    konghq.com/protocols: "https"
+    # Default rate limiting as specified in section 3.8.6
+    konghq.com/plugins: "rate-limiting"
+    # Rate limiting configuration
+    konghq.com/plugins.rate-limiting.config.minute: "60"
+    konghq.com/plugins.rate-limiting.config.policy: "local"
+    # CORS configuration as specified in section 3.8.6
+    konghq.com/plugins.cors.config.origins: "https://*.dollarfunding.com"
+    konghq.com/plugins.cors.config.methods: "GET,POST,PUT,DELETE,OPTIONS"
+    konghq.com/plugins.cors.config.headers: "Accept,Accept-Version,Content-Length,Content-MD5,Content-Type,Date,Authorization"
+    konghq.com/plugins.cors.config.exposed_headers: "X-Auth-Token"
+    konghq.com/plugins.cors.config.credentials: "true"
+    konghq.com/plugins.cors.config.max_age: "3600"
+  # TLS configuration
+  tls: true
+  # Path configuration
+  path: "/"
+  pathType: "Prefix"
+
+# Liveness probe configuration for self-healing services as specified in section 8.5.4
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  timeoutSeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+  successThreshold: 1
+  # Default HTTP probe (should be overridden by specific services)
+  httpGet:
+    path: /health
+    port: http
+
+# Readiness probe configuration for self-healing services as specified in section 8.5.4
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  timeoutSeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+  successThreshold: 1
+  # Default HTTP probe (should be overridden by specific services)
+  httpGet:
+    path: /health/ready
+    port: http
+
+# Startup probe configuration
+startupProbe:
+  enabled: false
+  initialDelaySeconds: 60
+  timeoutSeconds: 5
+  periodSeconds: 10
+  failureThreshold: 6
+  successThreshold: 1
+  # Default HTTP probe (should be overridden by specific services)
+  httpGet:
+    path: /health
+    port: http
+
+# Resource allocation as specified in section 8.5.4 to prevent resource contention
+resources:
+  # Default resource requests and limits for production
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+
+# Service-specific resource configurations
+resourceConfigs:
+  # Email Service (Node.js)
+  emailService:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Document Service (Python/scikit-learn)
+  documentService:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  # OCR Service (Python/TensorFlow)
+  ocrService:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+  # Data Service (Java/Spring Boot)
+  dataService:
+    requests:
+      cpu: "750m"
+      memory: "1.5Gi"
+    limits:
+      cpu: "1500m"
+      memory: "3Gi"
+  # Notification Service (Node.js)
+  notificationService:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # API Gateway (Kong)
+  apiGateway:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# Node selector for pod assignment
+nodeSelector: {}
+
+# Tolerations for pod assignment
+tolerations: []
+
+# Affinity for pod assignment
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Deployment/StatefulSet annotations
+annotations: {}
+
+# Default labels applied to all resources
+labels:
+  app.kubernetes.io/part-of: "mca-application-processing"
+  app.kubernetes.io/managed-by: "helm"
+
+# Network policies as specified in section 3.8.3
+networkPolicy:
+  # Enable network policies by default
+  enabled: true
+  # Default ingress rules
+  ingress:
+    # Allow traffic from the same namespace by default
+    fromSameNamespace: true
+    # Allow traffic from specific namespaces
+    fromNamespaces: []
+    # Allow traffic from specific pods by label selector
+    fromPodLabels: []
+    # Allow traffic from specific IP blocks
+    fromCIDR: []
+  # Default egress rules
+  egress:
+    # Allow traffic to the same namespace by default
+    toSameNamespace: true
+    # Allow traffic to specific namespaces
+    toNamespaces: []
+    # Allow traffic to specific pods by label selector
+    toPodLabels: []
+    # Allow traffic to specific IP blocks (DNS servers, etc.)
+    toCIDR: []
+
+# Metrics configuration
+metrics:
+  # Enable Prometheus metrics by default
+  enabled: true
+  # Service monitor configuration for Prometheus Operator
+  serviceMonitor:
+    enabled: true
+    namespace: "monitoring"
+    interval: "30s"
+    scrapeTimeout: "10s"
+    selector:
+      release: "prometheus"
+  # Prometheus rules
+  prometheusRules:
+    enabled: true
+    namespace: "monitoring"
+    # Default rules for all services
+    rules:
+      - alert: ServiceDown
+        expr: up{job="{{ template \"common.fullname\" . }}"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ template \"common.fullname\" . }} is down"
+          description: "Service {{ template \"common.fullname\" . }} has been down for more than 5 minutes"
+      - alert: HighCPUUsage
+        expr: sum(rate(container_cpu_usage_seconds_total{container="{{ template \"common.fullname\" . }}"}[5m])) / sum(kube_pod_container_resource_limits_cpu_cores{container="{{ template \"common.fullname\" . }}"}) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage for {{ template \"common.fullname\" . }}"
+          description: "{{ template \"common.fullname\" . }} has high CPU usage (> 80%) for more than 10 minutes"
+      - alert: HighMemoryUsage
+        expr: sum(container_memory_usage_bytes{container="{{ template \"common.fullname\" . }}"}) / sum(kube_pod_container_resource_limits_memory_bytes{container="{{ template \"common.fullname\" . }}"}) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage for {{ template \"common.fullname\" . }}"
+          description: "{{ template \"common.fullname\" . }} has high memory usage (> 80%) for more than 10 minutes"
+
+# Config maps and secrets
+configMaps:
+  # Enable creation of ConfigMap
+  enabled: false
+  # Data to include in ConfigMap
+  data: {}
+
+secrets:
+  # Enable creation of Secret
+  enabled: false
+  # Data to include in Secret (values should be base64 encoded)
+  data: {}
+
+# Environment variables configuration
+env:
+  # Environment variables to be set directly
+  variables: {}
+  # Environment variables from ConfigMaps
+  configMaps: []
+  # Environment variables from Secrets
+  secrets: []
+
+# Persistence configuration
+persistence:
+  # Enable persistence using Persistent Volume Claims
+  enabled: false
+  # Storage class for the persistent volume
+  storageClass: ""
+  # Access mode for the persistent volume
+  accessMode: ReadWriteOnce
+  # Size of the persistent volume
+  size: "1Gi"
+  # Annotations for the persistent volume claim
+  annotations: {}
+
+# Horizontal Pod Autoscaler configuration
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod Disruption Budget configuration
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # or use maxUnavailable instead
+  # maxUnavailable: 1
+
+# Logging configuration
+logging:
+  # Log level: ERROR, WARN, INFO, DEBUG
+  level: "INFO"
+  # Format: JSON or TEXT
+  format: "JSON"
+  # Include timestamps
+  timestamps: true
+  # Include caller information
+  caller: false
+  # Log to stdout
+  stdout: true
+  # Log to file
+  file:
+    enabled: false
+    path: "/var/log/app.log"
+    maxSize: "100Mi"
+    maxFiles: 5
+
+# Environment-specific overrides
+environmentOverrides:
+  # Staging environment overrides
+  staging:
+    # Resource allocation for staging
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    # Probe settings for staging
+    livenessProbe:
+      initialDelaySeconds: 30
+    readinessProbe:
+      initialDelaySeconds: 15
+    # Service-specific resource configurations for staging
+    resourceConfigs:
+      # OCR Service (Python/TensorFlow)
+      ocrService:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+      # Data Service (Java/Spring Boot)
+      dataService:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+    # Logging configuration for staging
+    logging:
+      level: "INFO"
+  
+  # Development environment overrides
+  development:
+    # Resource allocation for development
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+    # Probe settings for development
+    livenessProbe:
+      initialDelaySeconds: 15
+    readinessProbe:
+      initialDelaySeconds: 5
+    # Security context for development (can be less strict)
+    containerSecurityContext:
+      readOnlyRootFilesystem: false
+    # Service-specific resource configurations for development
+    resourceConfigs:
+      # OCR Service (Python/TensorFlow)
+      ocrService:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+      # Data Service (Java/Spring Boot)
+      dataService:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+    # Logging configuration for development
+    logging:
+      level: "DEBUG"
+      format: "TEXT"
+      caller: true

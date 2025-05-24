@@ -1,0 +1,159 @@
+{
+  "session:active:operations-staff:12345": {
+    "type": "hash",
+    "value": {
+      "userId": "12345",
+      "email": "operations@dollarfunding.com",
+      "role": "operations_staff",
+      "permissions": ["read:all", "write:application"],
+      "firstName": "John",
+      "lastName": "Operations",
+      "jwtToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsImVtYWlsIjoib3BlcmF0aW9uc0Bkb2xsYXJmdW5kaW5nLmNvbSIsInJvbGUiOiJvcGVyYXRpb25zX3N0YWZmIiwicGVybWlzc2lvbnMiOlsicmVhZDphbGwiLCJ3cml0ZTphcHBsaWNhdGlvbiJdLCJpYXQiOjE2MTYxNjE2MTYsImV4cCI6MTYxNjE2NTIxNn0.mock_signature",
+      "refreshToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature",
+      "tokenExpiry": 1616165216000,
+      "refreshTokenExpiry": 1616766416000,
+      "createdAt": 1616161616000,
+      "lastAccessedAt": 1616162616000,
+      "ipAddress": "192.168.1.100",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
+    },
+    "ttl": 86400
+  },
+  "session:active:system-admin:67890": {
+    "type": "hash",
+    "value": {
+      "userId": "67890",
+      "email": "admin@dollarfunding.com",
+      "role": "system_admin",
+      "permissions": ["read:all", "write:all", "admin:webhook"],
+      "firstName": "Jane",
+      "lastName": "Admin",
+      "jwtToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2Nzg5MCIsImVtYWlsIjoiYWRtaW5AZG9sbGFyZnVuZGluZy5jb20iLCJyb2xlIjoic3lzdGVtX2FkbWluIiwicGVybWlzc2lvbnMiOlsicmVhZDphbGwiLCJ3cml0ZTphbGwiLCJhZG1pbjp3ZWJob29rIl0sImlhdCI6MTYxNjE2MTYxNiwiZXhwIjoxNjE2MTY1MjE2fQ.mock_signature",
+      "refreshToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2Nzg5MCIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature",
+      "tokenExpiry": 1616165216000,
+      "refreshTokenExpiry": 1616766416000,
+      "createdAt": 1616161616000,
+      "lastAccessedAt": 1616163616000,
+      "ipAddress": "192.168.1.101",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
+    },
+    "ttl": 86400
+  },
+  "session:expired:operations-staff:23456": {
+    "type": "hash",
+    "value": {
+      "userId": "23456",
+      "email": "expired@dollarfunding.com",
+      "role": "operations_staff",
+      "permissions": ["read:all", "write:application"],
+      "firstName": "Expired",
+      "lastName": "User",
+      "jwtToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyMzQ1NiIsImVtYWlsIjoiZXhwaXJlZEBkb2xsYXJmdW5kaW5nLmNvbSIsInJvbGUiOiJvcGVyYXRpb25zX3N0YWZmIiwicGVybWlzc2lvbnMiOlsicmVhZDphbGwiLCJ3cml0ZTphcHBsaWNhdGlvbiJdLCJpYXQiOjE2MTUxNjE2MTYsImV4cCI6MTYxNTE2NTIxNn0.mock_signature",
+      "refreshToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyMzQ1NiIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE1MTYxNjE2LCJleHAiOjE2MTU3NjY0MTZ9.mock_refresh_signature",
+      "tokenExpiry": 1615165216000,
+      "refreshTokenExpiry": 1615766416000,
+      "createdAt": 1615161616000,
+      "lastAccessedAt": 1615162616000,
+      "ipAddress": "192.168.1.102",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.150 Safari/537.36"
+    },
+    "ttl": -1
+  },
+  "session:invalid:34567": {
+    "type": "hash",
+    "value": {
+      "userId": "34567",
+      "email": "invalid@dollarfunding.com",
+      "role": "unknown_role",
+      "permissions": [],
+      "firstName": "Invalid",
+      "lastName": "Session",
+      "jwtToken": "invalid.token.format",
+      "refreshToken": "invalid.refresh.token",
+      "tokenExpiry": 1616165216000,
+      "refreshTokenExpiry": 1616766416000,
+      "createdAt": 1616161616000,
+      "lastAccessedAt": 1616162616000,
+      "ipAddress": "192.168.1.103",
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1"
+    },
+    "ttl": 86400
+  },
+  "session:active:operations-staff:with-application:45678": {
+    "type": "hash",
+    "value": {
+      "userId": "45678",
+      "email": "operations2@dollarfunding.com",
+      "role": "operations_staff",
+      "permissions": ["read:all", "write:application"],
+      "firstName": "Sarah",
+      "lastName": "Operations",
+      "jwtToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0NTY3OCIsImVtYWlsIjoib3BlcmF0aW9uczJAZG9sbGFyZnVuZGluZy5jb20iLCJyb2xlIjoib3BlcmF0aW9uc19zdGFmZiIsInBlcm1pc3Npb25zIjpbInJlYWQ6YWxsIiwid3JpdGU6YXBwbGljYXRpb24iXSwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTYxNjUyMTZ9.mock_signature",
+      "refreshToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0NTY3OCIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature",
+      "tokenExpiry": 1616165216000,
+      "refreshTokenExpiry": 1616766416000,
+      "createdAt": 1616161616000,
+      "lastAccessedAt": 1616164616000,
+      "ipAddress": "192.168.1.104",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
+      "currentApplicationId": "APP123456",
+      "recentApplications": ["APP123456", "APP123455", "APP123454"]
+    },
+    "ttl": 86400
+  },
+  "user:session:mapping:12345": {
+    "type": "string",
+    "value": "session:active:operations-staff:12345",
+    "ttl": 86400
+  },
+  "user:session:mapping:67890": {
+    "type": "string",
+    "value": "session:active:system-admin:67890",
+    "ttl": 86400
+  },
+  "user:session:mapping:23456": {
+    "type": "string",
+    "value": "session:expired:operations-staff:23456",
+    "ttl": -1
+  },
+  "user:session:mapping:34567": {
+    "type": "string",
+    "value": "session:invalid:34567",
+    "ttl": 86400
+  },
+  "user:session:mapping:45678": {
+    "type": "string",
+    "value": "session:active:operations-staff:with-application:45678",
+    "ttl": 86400
+  },
+  "session:token:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsImVtYWlsIjoib3BlcmF0aW9uc0Bkb2xsYXJmdW5kaW5nLmNvbSIsInJvbGUiOiJvcGVyYXRpb25zX3N0YWZmIiwicGVybWlzc2lvbnMiOlsicmVhZDphbGwiLCJ3cml0ZTphcHBsaWNhdGlvbiJdLCJpYXQiOjE2MTYxNjE2MTYsImV4cCI6MTYxNjE2NTIxNn0.mock_signature": {
+    "type": "string",
+    "value": "session:active:operations-staff:12345",
+    "ttl": 3600
+  },
+  "session:token:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2Nzg5MCIsImVtYWlsIjoiYWRtaW5AZG9sbGFyZnVuZGluZy5jb20iLCJyb2xlIjoic3lzdGVtX2FkbWluIiwicGVybWlzc2lvbnMiOlsicmVhZDphbGwiLCJ3cml0ZTphbGwiLCJhZG1pbjp3ZWJob29rIl0sImlhdCI6MTYxNjE2MTYxNiwiZXhwIjoxNjE2MTY1MjE2fQ.mock_signature": {
+    "type": "string",
+    "value": "session:active:system-admin:67890",
+    "ttl": 3600
+  },
+  "session:token:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0NTY3OCIsImVtYWlsIjoib3BlcmF0aW9uczJAZG9sbGFyZnVuZGluZy5jb20iLCJyb2xlIjoib3BlcmF0aW9uc19zdGFmZiIsInBlcm1pc3Npb25zIjpbInJlYWQ6YWxsIiwid3JpdGU6YXBwbGljYXRpb24iXSwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTYxNjUyMTZ9.mock_signature": {
+    "type": "string",
+    "value": "session:active:operations-staff:with-application:45678",
+    "ttl": 3600
+  },
+  "session:refresh:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature": {
+    "type": "string",
+    "value": "session:active:operations-staff:12345",
+    "ttl": 604800
+  },
+  "session:refresh:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2Nzg5MCIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature": {
+    "type": "string",
+    "value": "session:active:system-admin:67890",
+    "ttl": 604800
+  },
+  "session:refresh:mapping:eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0NTY3OCIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNjE2MTYxNjE2LCJleHAiOjE2MTY3NjY0MTZ9.mock_refresh_signature": {
+    "type": "string",
+    "value": "session:active:operations-staff:with-application:45678",
+    "ttl": 604800
+  }
+}

@@ -1,0 +1,169 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "notification-service.fullname" . }}
+  labels:
+    {{- include "notification-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-processor
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "notification-service.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "notification-service.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "notification-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.environment }}
+            - name: PORT
+              value: "{{ .Values.service.port }}"
+            # RabbitMQ connection settings
+            - name: RABBITMQ_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: rabbitmq.host
+            - name: RABBITMQ_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: rabbitmq.port
+            - name: RABBITMQ_VHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: rabbitmq.vhost
+            - name: RABBITMQ_EXCHANGE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: rabbitmq.exchange
+            - name: RABBITMQ_QUEUE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: rabbitmq.queue
+            - name: RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-secret
+                  key: rabbitmq.username
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-secret
+                  key: rabbitmq.password
+            # Redis connection settings for rate limiting and caching
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: redis.host
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: redis.port
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-secret
+                  key: redis.password
+                  optional: true
+            # Webhook configuration
+            - name: WEBHOOK_RETRY_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: webhook.retry.max
+            - name: WEBHOOK_RETRY_DELAY_BASE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: webhook.retry.delay.base
+            - name: WEBHOOK_RETRY_DELAY_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: webhook.retry.delay.max
+            - name: WEBHOOK_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-secret
+                  key: webhook.hmac.secret
+            # Logging configuration
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "notification-service.fullname" . }}-config
+                  key: log.level
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+              readOnly: true
+            - name: tmp-volume
+              mountPath: /tmp
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "notification-service.fullname" . }}-config
+        - name: tmp-volume
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

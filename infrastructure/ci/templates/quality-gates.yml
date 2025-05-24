@@ -1,0 +1,826 @@
+# ======================================================
+# QUALITY GATES TEMPLATE
+# ======================================================
+# Reusable CI/CD quality gate template that defines standardized
+# code quality checks across all services in the Merchant Cash
+# Advance Application Processing System.
+#
+# This template provides parameterized steps for linting,
+# static analysis, and testing that can be included in any
+# service pipeline. It supports multiple programming languages
+# with conditional execution paths for TypeScript/JavaScript,
+# Python, and Java codebases.
+#
+# The template enforces consistent code quality standards,
+# test coverage thresholds, and reporting formats across all
+# microservices while allowing language-specific customizations.
+# ======================================================
+
+name: Quality Gates
+
+# Define parameters that can be passed when including this template
+parameters:
+  # Required parameters
+  language_type:
+    description: 'Primary language of the service (typescript, javascript, python, java)'
+    required: true
+    type: string
+  
+  service_name:
+    description: 'Name of the service or component'
+    required: true
+    type: string
+  
+  # Optional parameters with defaults
+  source_directory:
+    description: 'Directory containing source code to analyze'
+    required: false
+    default: 'src'
+    type: string
+  
+  test_directory:
+    description: 'Directory containing test code'
+    required: false
+    default: 'tests'
+    type: string
+  
+  coverage_threshold:
+    description: 'Minimum code coverage percentage required (0-100)'
+    required: false
+    default: 80
+    type: number
+  
+  branch_coverage_threshold:
+    description: 'Minimum branch coverage percentage required (0-100)'
+    required: false
+    default: 75
+    type: number
+  
+  skip_tests:
+    description: 'Whether to skip running tests'
+    required: false
+    default: false
+    type: boolean
+  
+  skip_linting:
+    description: 'Whether to skip linting'
+    required: false
+    default: false
+    type: boolean
+  
+  skip_type_checking:
+    description: 'Whether to skip type checking'
+    required: false
+    default: false
+    type: boolean
+  
+  skip_coverage:
+    description: 'Whether to skip coverage reporting'
+    required: false
+    default: false
+    type: boolean
+  
+  environment:
+    description: 'Deployment environment (development, staging, production)'
+    required: false
+    default: 'development'
+    type: string
+
+# Define variables with default values
+variables:
+  # Cache settings
+  CACHE_KEY_PREFIX: "deps-${{ parameters.language_type }}-${{ parameters.service_name }}"
+  CACHE_PATHS: |
+    ${{ if eq(parameters.language_type, 'typescript') || eq(parameters.language_type, 'javascript') }}:
+      node_modules/
+    ${{ elif eq(parameters.language_type, 'python') }}:
+      .venv/
+      ~/.cache/pip/
+    ${{ elif eq(parameters.language_type, 'java') }}:
+      ~/.m2/repository/
+      ~/.gradle/caches/
+  
+  # Linter configurations
+  ESLINT_CONFIG: ".eslintrc.js"
+  FLAKE8_CONFIG: "setup.cfg"
+  CHECKSTYLE_CONFIG: "checkstyle.xml"
+  
+  # Test configurations
+  JEST_CONFIG: "jest.config.js"
+  PYTEST_CONFIG: "pytest.ini"
+  JUNIT_REPORTS_DIR: "test-reports"
+  
+  # Coverage configurations
+  COVERAGE_REPORTS_DIR: "coverage-reports"
+  COVERAGE_THRESHOLD: ${{ parameters.coverage_threshold }}
+  BRANCH_COVERAGE_THRESHOLD: ${{ parameters.branch_coverage_threshold }}
+  
+  # Environment-specific settings
+  DEVELOPMENT_COVERAGE_THRESHOLD: 70
+  STAGING_COVERAGE_THRESHOLD: 75
+  PRODUCTION_COVERAGE_THRESHOLD: 80
+
+# Reusable job templates
+.quality_gate_base:
+  stage: test
+  variables:
+    # Determine coverage threshold based on environment
+    EFFECTIVE_COVERAGE_THRESHOLD: |
+      ${{ if eq(parameters.environment, 'development') }}:
+        ${{ variables.DEVELOPMENT_COVERAGE_THRESHOLD }}
+      ${{ elif eq(parameters.environment, 'staging') }}:
+        ${{ variables.STAGING_COVERAGE_THRESHOLD }}
+      ${{ elif eq(parameters.environment, 'production') }}:
+        ${{ variables.PRODUCTION_COVERAGE_THRESHOLD }}
+      ${{ else }}:
+        ${{ parameters.coverage_threshold }}
+    
+    EFFECTIVE_BRANCH_COVERAGE_THRESHOLD: |
+      ${{ if eq(parameters.environment, 'development') }}:
+        ${{ subtract(variables.DEVELOPMENT_COVERAGE_THRESHOLD, 5) }}
+      ${{ elif eq(parameters.environment, 'staging') }}:
+        ${{ subtract(variables.STAGING_COVERAGE_THRESHOLD, 5) }}
+      ${{ elif eq(parameters.environment, 'production') }}:
+        ${{ subtract(variables.PRODUCTION_COVERAGE_THRESHOLD, 5) }}
+      ${{ else }}:
+        ${{ parameters.branch_coverage_threshold }}
+  
+  # Common setup for all quality gate jobs
+  before_script:
+    - echo "Setting up quality gates for ${{ parameters.service_name }} (${{ parameters.language_type }})"
+    - |
+      # Create directories for reports
+      mkdir -p "$JUNIT_REPORTS_DIR"
+      mkdir -p "$COVERAGE_REPORTS_DIR"
+      
+      # Log effective thresholds
+      echo "Coverage threshold: $EFFECTIVE_COVERAGE_THRESHOLD%"
+      echo "Branch coverage threshold: $EFFECTIVE_BRANCH_COVERAGE_THRESHOLD%"
+
+# TypeScript/JavaScript quality gates
+.typescript_javascript_quality_gates:
+  extends: .quality_gate_base
+  cache:
+    key: ${{ variables.CACHE_KEY_PREFIX }}-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}
+    paths:
+      - node_modules/
+  before_script:
+    - !reference [.quality_gate_base, before_script]
+    - |
+      # Install dependencies if needed
+      if [ ! -d "node_modules" ] || [ ! -f "node_modules/.yarn-integrity" ]; then
+        echo "Installing dependencies..."
+        yarn install --frozen-lockfile
+      else
+        echo "Using cached dependencies"
+      fi
+
+# Python quality gates
+.python_quality_gates:
+  extends: .quality_gate_base
+  cache:
+    key: ${{ variables.CACHE_KEY_PREFIX }}-${{ hashFiles('**/requirements.txt', '**/pyproject.toml', '**/poetry.lock') }}
+    paths:
+      - .venv/
+      - ~/.cache/pip/
+  before_script:
+    - !reference [.quality_gate_base, before_script]
+    - |
+      # Set up Python virtual environment if needed
+      if [ ! -d ".venv" ]; then
+        echo "Setting up Python virtual environment..."
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install --upgrade pip
+        
+        # Install dependencies based on available files
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        elif [ -f "pyproject.toml" ]; then
+          pip install poetry
+          poetry install
+        fi
+        
+        # Install development dependencies
+        if [ -f "requirements-dev.txt" ]; then
+          pip install -r requirements-dev.txt
+        fi
+      else
+        echo "Using cached virtual environment"
+        source .venv/bin/activate
+      fi
+
+# Java quality gates
+.java_quality_gates:
+  extends: .quality_gate_base
+  cache:
+    key: ${{ variables.CACHE_KEY_PREFIX }}-${{ hashFiles('**/pom.xml', '**/build.gradle', '**/gradle.properties') }}
+    paths:
+      - ~/.m2/repository/
+      - ~/.gradle/caches/
+  before_script:
+    - !reference [.quality_gate_base, before_script]
+    - |
+      # Determine build system and install dependencies if needed
+      if [ -f "pom.xml" ]; then
+        echo "Maven project detected"
+        mvn dependency:go-offline
+      elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        echo "Gradle project detected"
+        ./gradlew dependencies
+      else
+        echo "No recognized Java build system found"
+        exit 1
+      fi
+
+# Linting jobs
+
+# TypeScript/JavaScript linting
+.typescript_javascript_lint:
+  extends: .typescript_javascript_quality_gates
+  script:
+    - echo "Running linting for TypeScript/JavaScript"
+    - |
+      # Determine linter configuration
+      if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || [ -f ".eslintrc" ] || [ -f "eslint.config.mjs" ]; then
+        echo "ESLint configuration found"
+        
+        # Run ESLint
+        echo "Running ESLint..."
+        yarn eslint --max-warnings=0 "${{ parameters.source_directory }}/**/*.{js,jsx,ts,tsx}" --format junit --output-file "$JUNIT_REPORTS_DIR/eslint.xml"
+        
+        # Check for TypeScript if applicable
+        if [ "${{ parameters.language_type }}" = "typescript" ] && [ "${{ parameters.skip_type_checking }}" != "true" ]; then
+          echo "Running TypeScript compiler..."
+          yarn tsc --noEmit
+        fi
+      else
+        echo "No ESLint configuration found, creating default configuration"
+        
+        # Create default ESLint configuration
+        echo "module.exports = {\n  extends: ['eslint:recommended'],\n  parserOptions: {\n    ecmaVersion: 2020\n  },\n  env: {\n    node: true\n  }\n};" > .eslintrc.js
+        
+        # Install ESLint if not already installed
+        yarn add --dev eslint
+        
+        # Run ESLint with default configuration
+        yarn eslint --max-warnings=0 "${{ parameters.source_directory }}/**/*.{js,jsx,ts,tsx}" --format junit --output-file "$JUNIT_REPORTS_DIR/eslint.xml"
+      fi
+  artifacts:
+    reports:
+      junit: ${{ variables.JUNIT_REPORTS_DIR }}/eslint.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/eslint.xml
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'typescript') || eq(parameters.language_type, 'javascript') }}
+      when: always
+    - if: ${{ parameters.skip_linting == true }}
+      when: never
+
+# Python linting
+.python_lint:
+  extends: .python_quality_gates
+  script:
+    - echo "Running linting for Python"
+    - |
+      # Activate virtual environment
+      source .venv/bin/activate
+      
+      # Determine linter configuration
+      if [ -f "setup.cfg" ] || [ -f ".flake8" ] || [ -f "tox.ini" ]; then
+        echo "Flake8 configuration found"
+      else
+        echo "No Flake8 configuration found, creating default configuration"
+        
+        # Create default Flake8 configuration
+        echo "[flake8]\nmax-line-length = 100\nexclude = .git,__pycache__,.venv\n" > setup.cfg
+      fi
+      
+      # Install Flake8 if not already installed
+      pip install flake8 flake8-junit-report
+      
+      # Run Flake8
+      echo "Running Flake8..."
+      flake8 "${{ parameters.source_directory }}" --output-file=flake8.txt || true
+      flake8_junit flake8.txt "$JUNIT_REPORTS_DIR/flake8.xml"
+      
+      # Run mypy for type checking if not skipped
+      if [ "${{ parameters.skip_type_checking }}" != "true" ]; then
+        echo "Running mypy for type checking..."
+        pip install mypy
+        mypy "${{ parameters.source_directory }}" --junit-xml "$JUNIT_REPORTS_DIR/mypy.xml" || true
+      fi
+  artifacts:
+    reports:
+      junit:
+        - ${{ variables.JUNIT_REPORTS_DIR }}/flake8.xml
+        - ${{ variables.JUNIT_REPORTS_DIR }}/mypy.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/flake8.xml
+      - ${{ variables.JUNIT_REPORTS_DIR }}/mypy.xml
+      - flake8.txt
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'python') }}
+      when: always
+    - if: ${{ parameters.skip_linting == true }}
+      when: never
+
+# Java linting
+.java_lint:
+  extends: .java_quality_gates
+  script:
+    - echo "Running linting for Java"
+    - |
+      # Determine build system
+      if [ -f "pom.xml" ]; then
+        echo "Running Maven linting..."
+        
+        # Check if CheckStyle plugin is configured
+        if grep -q "maven-checkstyle-plugin" pom.xml; then
+          echo "CheckStyle plugin found in pom.xml"
+        else
+          echo "Adding CheckStyle plugin to Maven build"
+          # This is a simplified approach; in a real scenario, you'd use a proper XML parser
+          sed -i '/<\/build>/i \
+          <plugin>\n            <groupId>org.apache.maven.plugins</groupId>\n            <artifactId>maven-checkstyle-plugin</artifactId>\n            <version>3.2.1</version>\n            <configuration>\n              <configLocation>google_checks.xml</configLocation>\n              <encoding>UTF-8</encoding>\n              <consoleOutput>true</consoleOutput>\n              <failsOnError>true</failsOnError>\n              <linkXRef>false</linkXRef>\n            </configuration>\n          </plugin>' pom.xml
+        fi
+        
+        # Run CheckStyle
+        mvn checkstyle:check
+        
+        # Run SpotBugs if not skipped
+        if [ "${{ parameters.skip_type_checking }}" != "true" ]; then
+          echo "Running SpotBugs..."
+          
+          # Check if SpotBugs plugin is configured
+          if grep -q "spotbugs-maven-plugin" pom.xml; then
+            echo "SpotBugs plugin found in pom.xml"
+          else
+            echo "Adding SpotBugs plugin to Maven build"
+            sed -i '/<\/build>/i \
+            <plugin>\n              <groupId>com.github.spotbugs</groupId>\n              <artifactId>spotbugs-maven-plugin</artifactId>\n              <version>4.7.3.0</version>\n              <configuration>\n                <xmlOutput>true</xmlOutput>\n                <xmlOutputDirectory>${project.build.directory}/spotbugs</xmlOutputDirectory>\n              </configuration>\n            </plugin>' pom.xml
+          fi
+          
+          # Run SpotBugs
+          mvn spotbugs:check
+        fi
+        
+        # Copy reports to standardized location
+        mkdir -p "$JUNIT_REPORTS_DIR"
+        find . -name "checkstyle-result.xml" -exec cp {} "$JUNIT_REPORTS_DIR/checkstyle.xml" \;
+        find . -name "spotbugsXml.xml" -exec cp {} "$JUNIT_REPORTS_DIR/spotbugs.xml" \;
+        
+      elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        echo "Running Gradle linting..."
+        
+        # Check if CheckStyle plugin is applied
+        if grep -q "checkstyle" build.gradle || grep -q "checkstyle" build.gradle.kts; then
+          echo "CheckStyle plugin found in Gradle build"
+        else
+          echo "Adding CheckStyle plugin to Gradle build"
+          echo "\napply plugin: 'checkstyle'\ncheckstyle {\n  toolVersion = '9.3'\n  configFile = rootProject.file('config/checkstyle/checkstyle.xml')\n  maxWarnings = 0\n}" >> build.gradle
+          
+          # Create default CheckStyle configuration
+          mkdir -p config/checkstyle
+          curl -o config/checkstyle/checkstyle.xml https://raw.githubusercontent.com/checkstyle/checkstyle/master/src/main/resources/google_checks.xml
+        fi
+        
+        # Run CheckStyle
+        ./gradlew checkstyleMain checkstyleTest
+        
+        # Run SpotBugs if not skipped
+        if [ "${{ parameters.skip_type_checking }}" != "true" ]; then
+          echo "Running SpotBugs..."
+          
+          # Check if SpotBugs plugin is applied
+          if grep -q "spotbugs" build.gradle || grep -q "spotbugs" build.gradle.kts; then
+            echo "SpotBugs plugin found in Gradle build"
+          else
+            echo "Adding SpotBugs plugin to Gradle build"
+            echo "\napply plugin: 'com.github.spotbugs'\nspotbugs {\n  toolVersion = '4.7.3'\n  ignoreFailures = false\n  effort = 'max'\n  reportLevel = 'medium'\n}\nspotbugsMain {\n  reports {\n    xml.enabled = true\n    html.enabled = true\n  }\n}" >> build.gradle
+            
+            # Add SpotBugs plugin to buildscript
+            sed -i '/repositories {/a \    maven { url "https://plugins.gradle.org/m2/" }' build.gradle
+            sed -i '/dependencies {/a \    classpath "com.github.spotbugs:spotbugs-gradle-plugin:5.0.13"' build.gradle
+          fi
+          
+          # Run SpotBugs
+          ./gradlew spotbugsMain
+        fi
+        
+        # Copy reports to standardized location
+        mkdir -p "$JUNIT_REPORTS_DIR"
+        find . -name "main.xml" -path "*/checkstyle/*" -exec cp {} "$JUNIT_REPORTS_DIR/checkstyle.xml" \;
+        find . -name "spotbugs*.xml" -exec cp {} "$JUNIT_REPORTS_DIR/spotbugs.xml" \;
+      fi
+  artifacts:
+    reports:
+      junit:
+        - ${{ variables.JUNIT_REPORTS_DIR }}/checkstyle.xml
+        - ${{ variables.JUNIT_REPORTS_DIR }}/spotbugs.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/checkstyle.xml
+      - ${{ variables.JUNIT_REPORTS_DIR }}/spotbugs.xml
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'java') }}
+      when: always
+    - if: ${{ parameters.skip_linting == true }}
+      when: never
+
+# Testing jobs
+
+# TypeScript/JavaScript testing
+.typescript_javascript_test:
+  extends: .typescript_javascript_quality_gates
+  script:
+    - echo "Running tests for TypeScript/JavaScript"
+    - |
+      # Determine test runner configuration
+      if [ -f "jest.config.js" ] || [ -f "jest.config.ts" ] || [ -f "jest.config.json" ]; then
+        echo "Jest configuration found"
+        TEST_RUNNER="jest"
+      elif [ -f "vitest.config.js" ] || [ -f "vitest.config.ts" ]; then
+        echo "Vitest configuration found"
+        TEST_RUNNER="vitest"
+      else
+        echo "No test runner configuration found, defaulting to Jest"
+        TEST_RUNNER="jest"
+        
+        # Create default Jest configuration
+        echo "module.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  collectCoverage: true,\n  coverageDirectory: 'coverage',\n  coverageReporters: ['text', 'lcov', 'cobertura'],\n  reporters: ['default', 'jest-junit'],\n};" > jest.config.js
+        
+        # Install Jest if not already installed
+        yarn add --dev jest ts-jest jest-junit @types/jest
+      fi
+      
+      # Run tests with coverage
+      if [ "$TEST_RUNNER" = "jest" ]; then
+        echo "Running tests with Jest..."
+        yarn jest --ci --coverage --coverageDirectory="$COVERAGE_REPORTS_DIR" --reporters=default --reporters=jest-junit
+      else
+        echo "Running tests with Vitest..."
+        yarn vitest run --coverage --reporter=junit --outputFile="$JUNIT_REPORTS_DIR/vitest.xml"
+        
+        # Copy coverage reports to standardized location
+        mkdir -p "$COVERAGE_REPORTS_DIR"
+        cp -r coverage/* "$COVERAGE_REPORTS_DIR/"
+      fi
+      
+      # Check coverage thresholds
+      if [ "${{ parameters.skip_coverage }}" != "true" ]; then
+        echo "Checking coverage thresholds..."
+        
+        # Extract coverage percentages
+        if [ -f "$COVERAGE_REPORTS_DIR/cobertura-coverage.xml" ]; then
+          STATEMENTS_COVERAGE=$(grep -oP 'line-rate="\K[0-9.]+' "$COVERAGE_REPORTS_DIR/cobertura-coverage.xml" | head -1)
+          BRANCH_COVERAGE=$(grep -oP 'branch-rate="\K[0-9.]+' "$COVERAGE_REPORTS_DIR/cobertura-coverage.xml" | head -1)
+          
+          # Convert to percentages
+          STATEMENTS_COVERAGE=$(echo "$STATEMENTS_COVERAGE * 100" | bc)
+          BRANCH_COVERAGE=$(echo "$BRANCH_COVERAGE * 100" | bc)
+          
+          # Check against thresholds
+          if (( $(echo "$STATEMENTS_COVERAGE < $EFFECTIVE_COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "Statement coverage ($STATEMENTS_COVERAGE%) is below threshold ($EFFECTIVE_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          if (( $(echo "$BRANCH_COVERAGE < $EFFECTIVE_BRANCH_COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "Branch coverage ($BRANCH_COVERAGE%) is below threshold ($EFFECTIVE_BRANCH_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          echo "Coverage thresholds met: Statements $STATEMENTS_COVERAGE%, Branches $BRANCH_COVERAGE%"
+        else
+          echo "Coverage report not found, skipping threshold check"
+        fi
+      fi
+  artifacts:
+    reports:
+      junit: ${{ variables.JUNIT_REPORTS_DIR }}/*.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: ${{ variables.COVERAGE_REPORTS_DIR }}/cobertura-coverage.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/*.xml
+      - ${{ variables.COVERAGE_REPORTS_DIR }}/**/*
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'typescript') || eq(parameters.language_type, 'javascript') }}
+      when: always
+    - if: ${{ parameters.skip_tests == true }}
+      when: never
+
+# Python testing
+.python_test:
+  extends: .python_quality_gates
+  script:
+    - echo "Running tests for Python"
+    - |
+      # Activate virtual environment
+      source .venv/bin/activate
+      
+      # Install pytest and coverage tools if not already installed
+      pip install pytest pytest-cov pytest-junit
+      
+      # Determine test directory
+      if [ -d "${{ parameters.test_directory }}" ]; then
+        TEST_DIR="${{ parameters.test_directory }}"
+      elif [ -d "tests" ]; then
+        TEST_DIR="tests"
+      elif [ -d "test" ]; then
+        TEST_DIR="test"
+      else
+        echo "No test directory found"
+        TEST_DIR="."
+      fi
+      
+      # Run tests with coverage
+      echo "Running pytest with coverage..."
+      python -m pytest "$TEST_DIR" \
+        --junitxml="$JUNIT_REPORTS_DIR/pytest.xml" \
+        --cov="${{ parameters.source_directory }}" \
+        --cov-report=term \
+        --cov-report=xml:"$COVERAGE_REPORTS_DIR/coverage.xml" \
+        --cov-report=html:"$COVERAGE_REPORTS_DIR/htmlcov"
+      
+      # Check coverage thresholds
+      if [ "${{ parameters.skip_coverage }}" != "true" ]; then
+        echo "Checking coverage thresholds..."
+        
+        # Extract coverage percentages
+        if [ -f "$COVERAGE_REPORTS_DIR/coverage.xml" ]; then
+          STATEMENTS_COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('$COVERAGE_REPORTS_DIR/coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)")
+          BRANCH_COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('$COVERAGE_REPORTS_DIR/coverage.xml'); root = tree.getroot(); print(float(root.attrib['branch-rate']) * 100)")
+          
+          # Check against thresholds
+          if (( $(echo "$STATEMENTS_COVERAGE < $EFFECTIVE_COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "Statement coverage ($STATEMENTS_COVERAGE%) is below threshold ($EFFECTIVE_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          if (( $(echo "$BRANCH_COVERAGE < $EFFECTIVE_BRANCH_COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "Branch coverage ($BRANCH_COVERAGE%) is below threshold ($EFFECTIVE_BRANCH_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          echo "Coverage thresholds met: Statements $STATEMENTS_COVERAGE%, Branches $BRANCH_COVERAGE%"
+        else
+          echo "Coverage report not found, skipping threshold check"
+        fi
+      fi
+  artifacts:
+    reports:
+      junit: ${{ variables.JUNIT_REPORTS_DIR }}/pytest.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: ${{ variables.COVERAGE_REPORTS_DIR }}/coverage.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/pytest.xml
+      - ${{ variables.COVERAGE_REPORTS_DIR }}/**/*
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'python') }}
+      when: always
+    - if: ${{ parameters.skip_tests == true }}
+      when: never
+
+# Java testing
+.java_test:
+  extends: .java_quality_gates
+  script:
+    - echo "Running tests for Java"
+    - |
+      # Determine build system
+      if [ -f "pom.xml" ]; then
+        echo "Running Maven tests..."
+        
+        # Run tests with coverage using JaCoCo
+        mvn test jacoco:report surefire-report:report
+        
+        # Copy reports to standardized location
+        mkdir -p "$JUNIT_REPORTS_DIR"
+        mkdir -p "$COVERAGE_REPORTS_DIR"
+        find . -name "TEST-*.xml" -path "*/surefire-reports/*" -exec cp {} "$JUNIT_REPORTS_DIR/" \;
+        find . -name "jacoco.xml" -exec cp {} "$COVERAGE_REPORTS_DIR/jacoco.xml" \;
+        find . -name "jacoco" -type d -exec cp -r {} "$COVERAGE_REPORTS_DIR/jacoco-html" \;
+        
+      elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        echo "Running Gradle tests..."
+        
+        # Check if JaCoCo plugin is applied
+        if grep -q "jacoco" build.gradle || grep -q "jacoco" build.gradle.kts; then
+          echo "JaCoCo plugin found in Gradle build"
+        else
+          echo "Adding JaCoCo plugin to Gradle build"
+          echo "\napply plugin: 'jacoco'\njacocoTestReport {\n  reports {\n    xml.enabled true\n    html.enabled true\n  }\n}\njacocoTestCoverageVerification {\n  violationRules {\n    rule {\n      limit {\n        minimum = $EFFECTIVE_COVERAGE_THRESHOLD / 100\n      }\n    }\n  }\n}" >> build.gradle
+        fi
+        
+        # Run tests with coverage
+        ./gradlew test jacocoTestReport
+        
+        # Copy reports to standardized location
+        mkdir -p "$JUNIT_REPORTS_DIR"
+        mkdir -p "$COVERAGE_REPORTS_DIR"
+        find . -name "TEST-*.xml" -path "*/test-results/*" -exec cp {} "$JUNIT_REPORTS_DIR/" \;
+        find . -name "jacocoTestReport.xml" -exec cp {} "$COVERAGE_REPORTS_DIR/jacoco.xml" \;
+        find . -name "jacocoHtml" -type d -exec cp -r {} "$COVERAGE_REPORTS_DIR/jacoco-html" \;
+      fi
+      
+      # Check coverage thresholds
+      if [ "${{ parameters.skip_coverage }}" != "true" ]; then
+        echo "Checking coverage thresholds..."
+        
+        # Extract coverage percentages from JaCoCo report
+        if [ -f "$COVERAGE_REPORTS_DIR/jacoco.xml" ]; then
+          # Install xmlstarlet if not available
+          if ! command -v xmlstarlet &> /dev/null; then
+            apt-get update && apt-get install -y xmlstarlet
+          fi
+          
+          # Extract coverage metrics
+          STATEMENTS_COVERED=$(xmlstarlet sel -t -v "sum(//report/counter[@type='LINE']/@covered)" "$COVERAGE_REPORTS_DIR/jacoco.xml")
+          STATEMENTS_MISSED=$(xmlstarlet sel -t -v "sum(//report/counter[@type='LINE']/@missed)" "$COVERAGE_REPORTS_DIR/jacoco.xml")
+          BRANCHES_COVERED=$(xmlstarlet sel -t -v "sum(//report/counter[@type='BRANCH']/@covered)" "$COVERAGE_REPORTS_DIR/jacoco.xml")
+          BRANCHES_MISSED=$(xmlstarlet sel -t -v "sum(//report/counter[@type='BRANCH']/@missed)" "$COVERAGE_REPORTS_DIR/jacoco.xml")
+          
+          # Calculate percentages
+          STATEMENTS_TOTAL=$((STATEMENTS_COVERED + STATEMENTS_MISSED))
+          BRANCHES_TOTAL=$((BRANCHES_COVERED + BRANCHES_MISSED))
+          
+          if [ "$STATEMENTS_TOTAL" -gt 0 ]; then
+            STATEMENTS_COVERAGE=$((STATEMENTS_COVERED * 100 / STATEMENTS_TOTAL))
+          else
+            STATEMENTS_COVERAGE=0
+          fi
+          
+          if [ "$BRANCHES_TOTAL" -gt 0 ]; then
+            BRANCH_COVERAGE=$((BRANCHES_COVERED * 100 / BRANCHES_TOTAL))
+          else
+            BRANCH_COVERAGE=0
+          fi
+          
+          # Check against thresholds
+          if [ "$STATEMENTS_COVERAGE" -lt "$EFFECTIVE_COVERAGE_THRESHOLD" ]; then
+            echo "Statement coverage ($STATEMENTS_COVERAGE%) is below threshold ($EFFECTIVE_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          if [ "$BRANCH_COVERAGE" -lt "$EFFECTIVE_BRANCH_COVERAGE_THRESHOLD" ]; then
+            echo "Branch coverage ($BRANCH_COVERAGE%) is below threshold ($EFFECTIVE_BRANCH_COVERAGE_THRESHOLD%)"
+            exit 1
+          fi
+          
+          echo "Coverage thresholds met: Statements $STATEMENTS_COVERAGE%, Branches $BRANCH_COVERAGE%"
+        else
+          echo "Coverage report not found, skipping threshold check"
+        fi
+      fi
+  artifacts:
+    reports:
+      junit: ${{ variables.JUNIT_REPORTS_DIR }}/*.xml
+      coverage_report:
+        coverage_format: jacoco
+        path: ${{ variables.COVERAGE_REPORTS_DIR }}/jacoco.xml
+    paths:
+      - ${{ variables.JUNIT_REPORTS_DIR }}/*.xml
+      - ${{ variables.COVERAGE_REPORTS_DIR }}/**/*
+    expire_in: 1 week
+  rules:
+    - if: ${{ eq(parameters.language_type, 'java') }}
+      when: always
+    - if: ${{ parameters.skip_tests == true }}
+      when: never
+
+# Combined quality gate jobs
+
+# TypeScript/JavaScript quality gates
+typescript_javascript_quality_gates:
+  stage: test
+  needs: []
+  script:
+    - echo "Running TypeScript/JavaScript quality gates"
+  trigger:
+    include:
+      - local: infrastructure/ci/templates/quality-gates.yml
+    strategy: depend
+    forward:
+      pipeline_variables: true
+  variables:
+    language_type: ${{ parameters.language_type }}
+    service_name: ${{ parameters.service_name }}
+    source_directory: ${{ parameters.source_directory }}
+    test_directory: ${{ parameters.test_directory }}
+    coverage_threshold: ${{ parameters.coverage_threshold }}
+    branch_coverage_threshold: ${{ parameters.branch_coverage_threshold }}
+    skip_tests: ${{ parameters.skip_tests }}
+    skip_linting: ${{ parameters.skip_linting }}
+    skip_type_checking: ${{ parameters.skip_type_checking }}
+    skip_coverage: ${{ parameters.skip_coverage }}
+    environment: ${{ parameters.environment }}
+  rules:
+    - if: ${{ eq(parameters.language_type, 'typescript') || eq(parameters.language_type, 'javascript') }}
+
+# Python quality gates
+python_quality_gates:
+  stage: test
+  needs: []
+  script:
+    - echo "Running Python quality gates"
+  trigger:
+    include:
+      - local: infrastructure/ci/templates/quality-gates.yml
+    strategy: depend
+    forward:
+      pipeline_variables: true
+  variables:
+    language_type: ${{ parameters.language_type }}
+    service_name: ${{ parameters.service_name }}
+    source_directory: ${{ parameters.source_directory }}
+    test_directory: ${{ parameters.test_directory }}
+    coverage_threshold: ${{ parameters.coverage_threshold }}
+    branch_coverage_threshold: ${{ parameters.branch_coverage_threshold }}
+    skip_tests: ${{ parameters.skip_tests }}
+    skip_linting: ${{ parameters.skip_linting }}
+    skip_type_checking: ${{ parameters.skip_type_checking }}
+    skip_coverage: ${{ parameters.skip_coverage }}
+    environment: ${{ parameters.environment }}
+  rules:
+    - if: ${{ eq(parameters.language_type, 'python') }}
+
+# Java quality gates
+java_quality_gates:
+  stage: test
+  needs: []
+  script:
+    - echo "Running Java quality gates"
+  trigger:
+    include:
+      - local: infrastructure/ci/templates/quality-gates.yml
+    strategy: depend
+    forward:
+      pipeline_variables: true
+  variables:
+    language_type: ${{ parameters.language_type }}
+    service_name: ${{ parameters.service_name }}
+    source_directory: ${{ parameters.source_directory }}
+    test_directory: ${{ parameters.test_directory }}
+    coverage_threshold: ${{ parameters.coverage_threshold }}
+    branch_coverage_threshold: ${{ parameters.branch_coverage_threshold }}
+    skip_tests: ${{ parameters.skip_tests }}
+    skip_linting: ${{ parameters.skip_linting }}
+    skip_type_checking: ${{ parameters.skip_type_checking }}
+    skip_coverage: ${{ parameters.skip_coverage }}
+    environment: ${{ parameters.environment }}
+  rules:
+    - if: ${{ eq(parameters.language_type, 'java') }}
+
+# Language-specific job includes
+
+# TypeScript/JavaScript jobs
+lint_typescript_javascript:
+  extends: .typescript_javascript_lint
+
+test_typescript_javascript:
+  extends: .typescript_javascript_test
+  needs: [lint_typescript_javascript]
+
+# Python jobs
+lint_python:
+  extends: .python_lint
+
+test_python:
+  extends: .python_test
+  needs: [lint_python]
+
+# Java jobs
+lint_java:
+  extends: .java_lint
+
+test_java:
+  extends: .java_test
+  needs: [lint_java]
+
+# Example usage:
+# 
+# include:
+#   - project: 'infrastructure/ci/templates'
+#     file: 'quality-gates.yml'
+#
+# stages:
+#   - test
+#   - build
+#   - deploy
+#
+# quality_gates:
+#   extends: typescript_javascript_quality_gates
+#   variables:
+#     language_type: "typescript"
+#     service_name: "email-service"
+#     source_directory: "src"
+#     test_directory: "tests"
+#     coverage_threshold: 80
+#     environment: "development"

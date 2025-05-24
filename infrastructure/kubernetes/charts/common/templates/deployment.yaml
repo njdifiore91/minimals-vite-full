@@ -1,0 +1,300 @@
+{{- /*
+Common deployment template for MCA Application Processing System microservices.
+This template provides a standardized Kubernetes Deployment configuration that can be used
+by all microservices in the system, with appropriate parameterization for different service types.
+
+Features:
+- Supports different container types (Node.js, Java, Python) with appropriate settings
+- Configures resource limits and requests based on service type
+- Implements liveness and readiness probes for container health monitoring
+- Sets up security context with non-root user and read-only filesystem
+- Provides environment variables from ConfigMaps and Secrets
+- Supports init containers and sidecars when needed
+- Special handling for OCR service with GPU resource allocation
+*/}}
+{{- define "common.deployment" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.deployment.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if .Values.deployment.strategy }}
+    {{- toYaml .Values.deployment.strategy | nindent 4 }}
+    {{- else }}
+    # Default to RollingUpdate strategy for zero-downtime deployments
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "common.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "common.serviceAccountName" . }}
+      securityContext:
+        {{- if .Values.podSecurityContext }}
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- else }}
+        # Default pod security context for enhanced security
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        {{- end }}
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- toYaml .Values.initContainers | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- if .Values.securityContext }}
+            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- else }}
+            # Default container security context for enhanced security
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          # Default to IfNotPresent for tagged images to optimize cluster performance
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.command }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.args }}
+          args:
+            {{- toYaml .Values.args | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            {{- if eq .Values.serviceType "nodejs" }}
+            httpGet:
+              path: {{ .Values.livenessProbe.path | default "/health" }}
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+            {{- else if eq .Values.serviceType "java" }}
+            httpGet:
+              path: {{ .Values.livenessProbe.path | default "/actuator/health/liveness" }}
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 60 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+            {{- else if eq .Values.serviceType "python" }}
+            httpGet:
+              path: {{ .Values.livenessProbe.path | default "/health/live" }}
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+            {{- else }}
+            {{- toYaml .Values.livenessProbe.probe | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            {{- if eq .Values.serviceType "nodejs" }}
+            httpGet:
+              path: {{ .Values.readinessProbe.path | default "/health" }}
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+            {{- else if eq .Values.serviceType "java" }}
+            httpGet:
+              path: {{ .Values.readinessProbe.path | default "/actuator/health/readiness" }}
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+            {{- else if eq .Values.serviceType "python" }}
+            httpGet:
+              path: {{ .Values.readinessProbe.path | default "/health/ready" }}
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+            {{- else }}
+            {{- toYaml .Values.readinessProbe.probe | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe.probe | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- if eq .Values.serviceType "nodejs" }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "500m" }}
+              memory: {{ .Values.resources.limits.memory | default "512Mi" }}
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.resources.requests.memory | default "128Mi" }}
+            {{- else if eq .Values.serviceType "java" }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "1000m" }}
+              memory: {{ .Values.resources.limits.memory | default "1Gi" }}
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "200m" }}
+              memory: {{ .Values.resources.requests.memory | default "512Mi" }}
+            {{- else if eq .Values.serviceType "python" }}
+            limits:
+              {{- if eq .Chart.Name "ocr-service" }}
+              cpu: {{ .Values.resources.limits.cpu | default "2000m" }}
+              memory: {{ .Values.resources.limits.memory | default "2Gi" }}
+              {{- if .Values.resources.limits.gpu }}
+              nvidia.com/gpu: {{ .Values.resources.limits.gpu }}
+              {{- end }}
+              {{- else }}
+              cpu: {{ .Values.resources.limits.cpu | default "1000m" }}
+              memory: {{ .Values.resources.limits.memory | default "1Gi" }}
+              {{- end }}
+            requests:
+              {{- if eq .Chart.Name "ocr-service" }}
+              cpu: {{ .Values.resources.requests.cpu | default "500m" }}
+              memory: {{ .Values.resources.requests.memory | default "512Mi" }}
+              {{- if .Values.resources.requests.gpu }}
+              nvidia.com/gpu: {{ .Values.resources.requests.gpu }}
+              {{- end }}
+              {{- else }}
+              cpu: {{ .Values.resources.requests.cpu | default "200m" }}
+              memory: {{ .Values.resources.requests.memory | default "256Mi" }}
+              {{- end }}
+            {{- else }}
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- end }}
+          # Environment variables for service discovery and configuration
+          env:
+            # Kubernetes metadata for service discovery
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: SERVICE_NAME
+              value: {{ include "common.fullname" . }}
+            # Service-specific environment variables
+            {{- if eq .Values.serviceType "nodejs" }}
+            - name: NODE_ENV
+              value: {{ .Values.env.NODE_ENV | default "production" | quote }}
+            {{- else if eq .Values.serviceType "java" }}
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.env.SPRING_PROFILES_ACTIVE | default "production" | quote }}
+            - name: JAVA_OPTS
+              value: {{ .Values.env.JAVA_OPTS | default "-Xms256m -Xmx512m -XX:+UseG1GC" | quote }}
+            {{- else if eq .Values.serviceType "python" }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: ENVIRONMENT
+              value: {{ .Values.env.ENVIRONMENT | default "production" | quote }}
+            {{- end }}
+            {{- if .Values.env }}
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+          envFrom:
+            {{- if .Values.configMapRef }}
+            - configMapRef:
+                name: {{ .Values.configMapRef }}
+            {{- end }}
+            {{- if .Values.secretRef }}
+            - secretRef:
+                name: {{ .Values.secretRef }}
+            {{- end }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.sidecars }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- else if eq .Chart.Name "ocr-service" }}
+      # OCR service requires GPU nodes
+      nodeSelector:
+        accelerator: gpu
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- else if eq .Chart.Name "ocr-service" }}
+      # OCR service requires GPU tolerations
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      {{- end }}
+      # Set default termination grace period to allow for graceful shutdown
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
+{{- end -}}

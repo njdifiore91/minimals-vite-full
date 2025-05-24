@@ -1,0 +1,409 @@
+{{- /*
+Data Service ConfigMap template for MCA Application Processing System.
+
+This template creates a Kubernetes ConfigMap for the Data Service, storing non-sensitive configuration data
+such as application properties, logging configuration, database connection properties,
+Redis cache configuration with TTL settings, and RabbitMQ connection properties.
+
+Features:
+- Spring Boot application properties
+- Logging configuration with specified log levels (ERROR, WARN, INFO, DEBUG)
+- Database connection properties (non-sensitive)
+- Redis cache configuration with TTL settings (Application data: 15 minutes)
+- RabbitMQ connection properties (non-sensitive)
+- Environment-specific configuration
+
+Usage:
+```yaml
+# values.yaml
+dataService:
+  config:
+    application:
+      name: "mca-data-service"
+    logging:
+      level:
+        root: "INFO"
+        application: "DEBUG"
+    postgresql:
+      host: "postgresql"
+      port: 5432
+      database: "mca_db"
+      maxPoolSize: 10
+      minIdle: 5
+    redis:
+      host: "redis"
+      port: 6379
+      ttl:
+        data: 900000  # 15 minutes in milliseconds
+        session: 86400000  # 24 hours in milliseconds
+    rabbitmq:
+      host: "rabbitmq"
+      port: 5672
+      vhost: "/"
+      exchanges:
+        documents: "mca.documents"
+      queues:
+        documentProcessing: "document-processing"
+        dataExtraction: "data-extraction"
+        notification: "notification"
+```
+*/ -}}
+
+{{- $fullName := include "data-service.fullname" . -}}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "data-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data-service
+  annotations:
+    # Add version tracking for config updates
+    config.kubernetes.io/version: {{ .Values.dataService.config.version | default "1.0.0" | quote }}
+    # Add timestamp for auditing
+    config.kubernetes.io/created-at: {{ now | date "2006-01-02T15:04:05Z07:00" | quote }}
+    # Add environment indicator
+    {{- if .Values.global }}
+    {{- if .Values.global.environment }}
+    environment.dollarfunding.com/name: {{ .Values.global.environment }}
+    {{- end }}
+    {{- end }}
+data:
+  # Main Spring Boot application configuration
+  application.yml: |
+    # Spring Boot Application Configuration
+    spring:
+      application:
+        name: {{ .Values.dataService.config.application.name | default "mca-data-service" }}
+      
+      # Database Configuration (non-sensitive)
+      # PostgreSQL 14 as specified in section 0.1.2
+      datasource:
+        driver-class-name: org.postgresql.Driver
+        hikari:
+          maximum-pool-size: {{ .Values.dataService.config.postgresql.maxPoolSize | default 10 }}
+          minimum-idle: {{ .Values.dataService.config.postgresql.minIdle | default 5 }}
+          connection-timeout: 30000
+          idle-timeout: 600000
+          max-lifetime: 1800000
+      
+      # JPA Configuration
+      jpa:
+        hibernate:
+          ddl-auto: validate
+        properties:
+          hibernate:
+            dialect: org.hibernate.dialect.PostgreSQLDialect
+            format_sql: true
+            jdbc.batch_size: 50
+            order_inserts: true
+            order_updates: true
+        open-in-view: false
+      
+      # Flyway Migration Configuration
+      flyway:
+        enabled: true
+        baseline-on-migrate: true
+        locations: classpath:db/migrations
+        table: schema_version
+      
+      # Redis Cache Configuration
+      # Redis 7.0 as specified in section 0.1.2
+      redis:
+        host: ${SPRING_REDIS_HOST:localhost}
+        port: ${SPRING_REDIS_PORT:6379}
+      cache:
+        type: redis
+        redis:
+          time-to-live: ${SPRING_CACHE_REDIS_TIME_TO_LIVE:900000}  # 15 minutes in milliseconds as specified in section 0.2.5
+          cache-null-values: false
+      session:
+        store-type: redis
+        redis:
+          namespace: mca:session
+          flush-mode: on-save
+          timeout: ${SPRING_SESSION_REDIS_TIMEOUT:86400000}  # 24 hours in milliseconds as specified in section 3.5.1
+      
+      # RabbitMQ Configuration
+      # RabbitMQ as specified in section 0.1.2
+      rabbitmq:
+        host: ${SPRING_RABBITMQ_HOST:localhost}
+        port: ${SPRING_RABBITMQ_PORT:5672}
+        virtual-host: {{ .Values.dataService.config.rabbitmq.vhost | default "/" }}
+        listener:
+          simple:
+            concurrency: 5
+            max-concurrency: 10
+            prefetch: 1
+            default-requeue-rejected: false
+            retry:
+              enabled: true
+              initial-interval: 1000
+              max-attempts: 3
+              max-interval: 10000
+              multiplier: 2.0
+      
+      # Jackson JSON Configuration
+      jackson:
+        date-format: com.fasterxml.jackson.databind.util.ISO8601DateFormat
+        serialization:
+          write-dates-as-timestamps: false
+        default-property-inclusion: non_null
+    
+    # Server Configuration
+    server:
+      port: 8080
+      servlet:
+        context-path: /api/v1
+      compression:
+        enabled: true
+        mime-types: application/json,application/xml,text/html,text/xml,text/plain
+        min-response-size: 1024
+      error:
+        include-message: always
+        include-binding-errors: always
+        include-stacktrace: never
+        include-exception: false
+    
+    # Management Endpoints Configuration
+    management:
+      server:
+        port: 8081
+      endpoints:
+        web:
+          exposure:
+            include: health,info,metrics,prometheus
+          base-path: /actuator
+      endpoint:
+        health:
+          show-details: when_authorized
+          probes:
+            enabled: true
+          group:
+            readiness:
+              include: db,redis,rabbitmq
+            liveness:
+              include: ping
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      info:
+        env:
+          enabled: true
+        git:
+          enabled: true
+        build:
+          enabled: true
+    
+    # Application-specific Configuration
+    app:
+      # Document processing configuration
+      document:
+        storage:
+          base-url: {{ .Values.dataService.config.document.storage.baseUrl | default "https://storage.dollarfunding.com" }}
+          bucket: {{ .Values.dataService.config.document.storage.bucket | default "mca-documents-${spring.profiles.active}" }}
+      
+      # Message exchange and queue configuration as specified in section 0.1.3
+      messaging:
+        exchanges:
+          documents: {{ .Values.dataService.config.rabbitmq.exchanges.documents | default "mca.documents" }}
+        queues:
+          document-processing: {{ .Values.dataService.config.rabbitmq.queues.documentProcessing | default "document-processing" }}
+          data-extraction: {{ .Values.dataService.config.rabbitmq.queues.dataExtraction | default "data-extraction" }}
+          notification: {{ .Values.dataService.config.rabbitmq.queues.notification | default "notification" }}
+      
+      # Security configuration
+      security:
+        allowed-origins: {{ .Values.dataService.config.security.allowedOrigins | default "https://app.dollarfunding.com" }}
+        allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+        allowed-headers: Authorization,Content-Type,X-Requested-With
+        exposed-headers: X-Total-Count
+        max-age: 3600
+      
+      # Field-level encryption configuration for PII as specified in section 0.2.6
+      encryption:
+        enabled: true
+        algorithm: AES/GCM/NoPadding
+        key-size: 256
+      
+      # Application processing metrics as specified in section 0.2.6
+      metrics:
+        processing-time:
+          enabled: true
+          sla-threshold-ms: 300000  # 5 minutes in milliseconds
+        ocr-accuracy:
+          enabled: true
+          threshold: 0.99  # 99% accuracy
+
+  # Logging Configuration
+  logback-spring.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <!-- Console Appender for local development -->
+      <appender name="Console" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+          <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+      </appender>
+      
+      <!-- JSON Appender for production environments -->
+      <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+          <includeMdc>true</includeMdc>
+          <includeContext>true</includeContext>
+          <customFields>{"service":"data-service","environment":"${spring.profiles.active}"}</customFields>
+        </encoder>
+      </appender>
+      
+      <!-- Root Logger -->
+      <root level="${LOGGING_LEVEL_ROOT:-INFO}">
+        <appender-ref ref="${LOG_APPENDER:-Console}" />
+      </root>
+      
+      <!-- Application Logger with specified log levels as in section 0.2.5 -->
+      <logger name="com.dollarfunding.mca" level="${LOGGING_LEVEL_COM_DOLLARFUNDING_MCA:-INFO}" additivity="false">
+        <appender-ref ref="${LOG_APPENDER:-Console}" />
+      </logger>
+      
+      <!-- Framework Loggers -->
+      <logger name="org.springframework" level="WARN" />
+      <logger name="org.hibernate" level="WARN" />
+      <logger name="org.flywaydb" level="INFO" />
+      <logger name="com.zaxxer.hikari" level="WARN" />
+      <logger name="org.springframework.cache" level="INFO" />
+      <logger name="org.springframework.data.redis" level="INFO" />
+      <logger name="org.springframework.amqp" level="INFO" />
+      
+      <!-- Security Loggers -->
+      <logger name="org.springframework.security" level="INFO" />
+      <logger name="com.dollarfunding.mca.security" level="INFO" />
+      
+      <!-- Performance Loggers -->
+      <logger name="com.dollarfunding.mca.performance" level="DEBUG" />
+      
+      <!-- SQL Logging (only in development) -->
+      <springProfile name="development">
+        <logger name="org.hibernate.SQL" level="DEBUG" />
+        <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE" />
+      </springProfile>
+    </configuration>
+
+  # RabbitMQ Exchange and Queue Definitions
+  rabbitmq-definitions.json: |
+    {
+      "exchanges": [
+        {
+          "name": "{{ .Values.dataService.config.rabbitmq.exchanges.documents | default "mca.documents" }}",
+          "type": "fanout",
+          "durable": true,
+          "auto_delete": false,
+          "internal": false,
+          "arguments": {}
+        }
+      ],
+      "queues": [
+        {
+          "name": "{{ .Values.dataService.config.rabbitmq.queues.documentProcessing | default "document-processing" }}",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-message-ttl": 86400000,
+            "x-dead-letter-exchange": "dlx",
+            "x-dead-letter-routing-key": "document-processing.dlq"
+          }
+        },
+        {
+          "name": "{{ .Values.dataService.config.rabbitmq.queues.dataExtraction | default "data-extraction" }}",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-message-ttl": 86400000,
+            "x-dead-letter-exchange": "dlx",
+            "x-dead-letter-routing-key": "data-extraction.dlq"
+          }
+        },
+        {
+          "name": "{{ .Values.dataService.config.rabbitmq.queues.notification | default "notification" }}",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-message-ttl": 86400000,
+            "x-dead-letter-exchange": "dlx",
+            "x-dead-letter-routing-key": "notification.dlq"
+          }
+        }
+      ],
+      "bindings": [
+        {
+          "source": "{{ .Values.dataService.config.rabbitmq.exchanges.documents | default "mca.documents" }}",
+          "vhost": "{{ .Values.dataService.config.rabbitmq.vhost | default "/" }}",
+          "destination": "{{ .Values.dataService.config.rabbitmq.queues.documentProcessing | default "document-processing" }}",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        },
+        {
+          "source": "{{ .Values.dataService.config.rabbitmq.exchanges.documents | default "mca.documents" }}",
+          "vhost": "{{ .Values.dataService.config.rabbitmq.vhost | default "/" }}",
+          "destination": "{{ .Values.dataService.config.rabbitmq.queues.dataExtraction | default "data-extraction" }}",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        },
+        {
+          "source": "{{ .Values.dataService.config.rabbitmq.exchanges.documents | default "mca.documents" }}",
+          "vhost": "{{ .Values.dataService.config.rabbitmq.vhost | default "/" }}",
+          "destination": "{{ .Values.dataService.config.rabbitmq.queues.notification | default "notification" }}",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        }
+      ]
+    }
+
+  # Database Schema Validation Configuration
+  schema-validation.json: |
+    {
+      "schemas": [
+        {
+          "name": "Applications",
+          "fields": [
+            {"name": "id", "type": "UUID", "required": true},
+            {"name": "status", "type": "STRING", "required": true},
+            {"name": "metadata", "type": "JSONB", "required": false},
+            {"name": "created_at", "type": "TIMESTAMP", "required": true},
+            {"name": "updated_at", "type": "TIMESTAMP", "required": true},
+            {"name": "review_status", "type": "STRING", "required": true}
+          ]
+        },
+        {
+          "name": "Documents",
+          "fields": [
+            {"name": "id", "type": "UUID", "required": true},
+            {"name": "application_id", "type": "UUID", "required": true},
+            {"name": "type", "type": "STRING", "required": true},
+            {"name": "storage_path", "type": "STRING", "required": true},
+            {"name": "classification", "type": "STRING", "required": true},
+            {"name": "uploaded_at", "type": "TIMESTAMP", "required": true},
+            {"name": "metadata", "type": "JSONB", "required": false}
+          ]
+        },
+        {
+          "name": "MerchantDetails",
+          "fields": [
+            {"name": "id", "type": "UUID", "required": true},
+            {"name": "application_id", "type": "UUID", "required": true},
+            {"name": "legal_name", "type": "STRING", "required": true, "encrypted": true},
+            {"name": "dba_name", "type": "STRING", "required": false, "encrypted": false},
+            {"name": "ein", "type": "STRING", "required": true, "encrypted": true},
+            {"name": "address", "type": "JSONB", "required": true, "encrypted": true},
+            {"name": "industry", "type": "STRING", "required": true, "encrypted": false},
+            {"name": "revenue", "type": "NUMERIC", "required": true, "encrypted": true}
+          ]
+        }
+      ]
+    }

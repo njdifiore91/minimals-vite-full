@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocr-service"
+version = "0.1.0"
+description = "OCR Service for Merchant Cash Advance Application Processing System"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Dollar Funding", email = "tech@dollarfunding.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: Other/Proprietary License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+keywords = ["ocr", "tensorflow", "document-processing", "machine-learning", "microservice"]
+
+[project.urls]
+Documentation = "https://github.com/dollarfunding/ocr-service/docs"
+Source = "https://github.com/dollarfunding/ocr-service"
+Issues = "https://github.com/dollarfunding/ocr-service/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"

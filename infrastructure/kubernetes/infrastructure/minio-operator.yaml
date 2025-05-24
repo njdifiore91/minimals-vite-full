@@ -1,0 +1,395 @@
+---
+# MinIO Operator Custom Resource Definition
+# This file defines the MinIO operator CRD that enables declarative management
+# of S3-compatible storage in Kubernetes for the MCA Application Processing System
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenants.minio.min.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.4.1
+  labels:
+    app: minio-operator
+spec:
+  group: minio.min.io
+  names:
+    kind: Tenant
+    listKind: TenantList
+    plural: tenants
+    singular: tenant
+  scope: Namespaced
+  versions:
+    - name: v2
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .status.currentState
+          name: Current State
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      schema:
+        openAPIV3Schema:
+          description: Tenant is the Schema for the tenants API
+          type: object
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation of an object.'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this object represents.'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: TenantSpec defines the desired state of Tenant
+              type: object
+              properties:
+                # Core tenant configuration
+                image:
+                  description: MinIO image for the tenant
+                  type: string
+                imagePullPolicy:
+                  description: Image pull policy
+                  type: string
+                  enum: [Always, IfNotPresent, Never]
+                imagePullSecret:
+                  description: Image pull secret
+                  type: string
+                # Security configuration
+                credsSecret:
+                  description: Secret containing MinIO credentials
+                  type: string
+                # Encryption configuration
+                encryption:
+                  description: Server-side encryption configuration with AES-256 support
+                  type: object
+                  properties:
+                    enabled:
+                      description: Enable server-side encryption
+                      type: boolean
+                    algorithm:
+                      description: Encryption algorithm to use (AES-256-GCM)
+                      type: string
+                      enum: [AES256]
+                    kmsSecret:
+                      description: Secret containing KMS configuration
+                      type: string
+                    kmsEndpoint:
+                      description: KMS server endpoint
+                      type: string
+                    kmsKeyID:
+                      description: KMS key ID for encryption
+                      type: string
+                # Storage configuration
+                pools:
+                  description: Storage pools configuration
+                  type: array
+                  items:
+                    type: object
+                    required: [servers, volumesPerServer, volumeClaimTemplate]
+                    properties:
+                      name:
+                        description: Name of the pool
+                        type: string
+                      servers:
+                        description: Number of MinIO servers in this pool
+                        type: integer
+                        minimum: 1
+                      volumesPerServer:
+                        description: Number of volumes per MinIO server
+                        type: integer
+                        minimum: 1
+                      volumeClaimTemplate:
+                        description: PVC template for volumes
+                        type: object
+                        properties:
+                          metadata:
+                            type: object
+                          spec:
+                            type: object
+                            properties:
+                              accessModes:
+                                type: array
+                                items:
+                                  type: string
+                              resources:
+                                type: object
+                                properties:
+                                  requests:
+                                    type: object
+                                    properties:
+                                      storage:
+                                        type: string
+                              storageClassName:
+                                type: string
+                # Resource limits and requests
+                resources:
+                  description: Resource requirements for the MinIO containers
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                # TLS configuration
+                certConfig:
+                  description: Certificate configuration for TLS
+                  type: object
+                  properties:
+                    commonName:
+                      description: Common name for the certificate
+                      type: string
+                    organizationName:
+                      description: Organization name for the certificate
+                      type: string
+                    dnsNames:
+                      description: DNS names for the certificate
+                      type: array
+                      items:
+                        type: string
+                # Monitoring configuration
+                metrics:
+                  description: Prometheus metrics configuration
+                  type: object
+                  properties:
+                    enabled:
+                      description: Enable Prometheus metrics
+                      type: boolean
+                    port:
+                      description: Port to expose metrics
+                      type: integer
+                      minimum: 1024
+                      maximum: 65535
+            status:
+              description: TenantStatus defines the observed state of Tenant
+              type: object
+              properties:
+                currentState:
+                  description: Current state of the MinIO Tenant
+                  type: string
+                conditions:
+                  description: Conditions of the MinIO Tenant
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        description: Type of the condition
+                        type: string
+                      status:
+                        description: Status of the condition
+                        type: string
+                      lastTransitionTime:
+                        description: Last time the condition transitioned
+                        type: string
+                        format: date-time
+                      reason:
+                        description: Reason for the condition
+                        type: string
+                      message:
+                        description: Message about the condition
+                        type: string
+---
+# Service Account for the MinIO Operator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: minio-operator
+  namespace: minio-operator
+---
+# ClusterRole for the MinIO Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: minio-operator-role
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services", "events"]
+    verbs: ["get", "watch", "create", "list", "patch", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "deployments"]
+    verbs: ["get", "watch", "create", "list", "patch", "update", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "watch", "create", "list", "patch", "update", "delete"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests", "certificatesigningrequests/approval"]
+    verbs: ["get", "create", "update", "delete", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["signers"]
+    verbs: ["approve"]
+  - apiGroups: ["minio.min.io"]
+    resources: ["tenants", "tenants/status", "tenants/finalizers"]
+    verbs: ["get", "watch", "create", "update", "list", "patch", "delete"]
+  - apiGroups: ["min.io"]
+    resources: ["*"]
+    verbs: ["get", "watch", "create", "update", "list", "patch", "delete"]
+---
+# ClusterRoleBinding for the MinIO Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: minio-operator-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: minio-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: minio-operator
+    namespace: minio-operator
+---
+# Deployment for the MinIO Operator
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-operator
+  namespace: minio-operator
+  labels:
+    app: minio-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio-operator
+  template:
+    metadata:
+      labels:
+        app: minio-operator
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8383"
+        prometheus.io/scrape: "true"
+    spec:
+      serviceAccountName: minio-operator
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+      containers:
+        - name: minio-operator
+          image: minio/operator:v7.1.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          env:
+            - name: MINIO_OPERATOR_TLS_ENABLE
+              value: "on"
+            - name: CLUSTER_DOMAIN
+              value: "cluster.local"
+            - name: WATCHED_NAMESPACE
+              value: ""
+            - name: MINIO_OPERATOR_DEFAULT_ENCRYPTION
+              value: "on"
+            - name: MINIO_OPERATOR_DEFAULT_ENCRYPTION_ALGORITHM
+              value: "AES256"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          ports:
+            - containerPort: 4222
+              name: webhook
+            - containerPort: 4233
+              name: https
+            - containerPort: 8383
+              name: metrics
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config-volume
+              mountPath: /etc/minio/config
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: config-volume
+          configMap:
+            name: minio-operator-config
+---
+# Service for the MinIO Operator
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-operator
+  namespace: minio-operator
+  labels:
+    app: minio-operator
+spec:
+  ports:
+    - port: 4222
+      name: webhook
+      targetPort: webhook
+    - port: 4233
+      name: https
+      targetPort: https
+    - port: 8383
+      name: metrics
+      targetPort: metrics
+  selector:
+    app: minio-operator
+---
+# ConfigMap for the MinIO Operator
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-operator-config
+  namespace: minio-operator
+data:
+  # Default encryption configuration with AES-256
+  encryption.yaml: |
+    encryption:
+      enabled: true
+      algorithm: AES256
+  
+  # Default resource limits for MinIO tenants
+  resources.yaml: |
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  
+  # Bucket configuration for MCA document storage
+  buckets.yaml: |
+    buckets:
+      - name: mca-documents-production
+        region: us-east-1
+        objectLocking: true
+        versioning: true
+        encryption:
+          enabled: true
+          algorithm: AES256
+      - name: mca-documents-staging
+        region: us-east-1
+        objectLocking: true
+        versioning: true
+        encryption:
+          enabled: true
+          algorithm: AES256

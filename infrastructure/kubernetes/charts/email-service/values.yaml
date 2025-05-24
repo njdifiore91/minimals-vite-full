@@ -1,0 +1,169 @@
+# Email Service Helm Chart Values
+# This file provides default configuration values for the Email Service Helm chart
+
+# Container image configuration
+image:
+  repository: node
+  tag: "20-alpine"
+  pullPolicy: IfNotPresent
+
+# Number of replicas to deploy
+replicaCount: 1
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Pod security context
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  readOnlyRootFilesystem: true
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+# IMAP connection settings for monitoring email inbox
+imap:
+  host: "imap.dollarfunding.com"
+  port: 993
+  user: "submissions@dollarfunding.com"
+  password: ""
+  tls: true
+  tlsOptions:
+    rejectUnauthorized: true
+  timeout: 30000
+  keepalive:
+    enable: true
+    interval: 10000
+    idleInterval: 300000
+
+# RabbitMQ connection settings for message queue
+rabbitmq:
+  host: "rabbitmq"
+  port: 5672
+  user: "guest"
+  password: "guest"
+  vhost: "/"
+  exchange: "mca.documents"
+  exchangeType: "fanout"
+  queue: "document-processing"
+
+# Liveness and readiness probe configuration
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+  httpGet:
+    path: /health
+    port: http
+
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+  httpGet:
+    path: /ready
+    port: http
+
+# Horizontal Pod Autoscaler configuration
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node selector for pod assignment
+nodeSelector: {}
+
+# Tolerations for pod assignment
+tolerations: []
+
+# Affinity for pod assignment
+affinity: {}
+
+# Environment-specific configurations
+# These values will be merged with the above defaults when specified
+environments:
+  development:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 300m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    autoscaling:
+      enabled: false
+    imap:
+      host: "imap-dev.dollarfunding.com"
+      user: "submissions-dev@dollarfunding.com"
+    rabbitmq:
+      host: "rabbitmq-dev"
+
+  staging:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    imap:
+      host: "imap-staging.dollarfunding.com"
+      user: "submissions-staging@dollarfunding.com"
+    rabbitmq:
+      host: "rabbitmq-staging"
+
+  production:
+    replicaCount: 3
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    imap:
+      host: "imap.dollarfunding.com"
+      user: "submissions@dollarfunding.com"
+    rabbitmq:
+      host: "rabbitmq-production"
+
+# Additional environment variables to pass to the container
+extraEnv: []
+  # - name: LOG_LEVEL
+  #   value: "info"
+
+# Additional volumes to mount to the container
+extraVolumes: []
+# extraVolumeMounts: []
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Ingress configuration (if needed)
+ingress:
+  enabled: false
+  annotations: {}
+  hosts: []
+  tls: []

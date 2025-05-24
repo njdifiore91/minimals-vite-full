@@ -1,0 +1,268 @@
+# Default values for document-service Helm chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+## Image configuration
+## Specifies the container image details for the Document Service
+image:
+  # Docker image repository
+  repository: dollarfunding/document-service
+  # Image tag (using Python 3.9 with scikit-learn 1.4.1 as specified in sections 3.1.1 and 3.2.2)
+  tag: "python3.9-scikit-1.4.1"
+  # Image pull policy
+  pullPolicy: IfNotPresent
+
+## Number of replicas to deploy
+## Minimum 2 for high availability
+replicaCount: 2
+
+## Pod resource requirements
+## Document Service requires minimum 16GB RAM for processing larger document batches as specified in section 3.2.3
+resources:
+  limits:
+    # Maximum CPU allocation per pod
+    cpu: 4
+    # Maximum memory allocation per pod (16GB as required in section 3.2.3)
+    memory: 16Gi
+  requests:
+    # Minimum CPU allocation per pod
+    cpu: 2
+    # Minimum memory allocation per pod (8GB to ensure adequate resources)
+    memory: 8Gi
+
+## Service configuration
+## Defines how the service is exposed within the cluster
+service:
+  # Service type (ClusterIP for internal access only)
+  type: ClusterIP
+  # Main application port
+  port: 5000
+  # Metrics port for Prometheus scraping
+  metricsPort: 9090
+
+## Liveness and readiness probe configuration
+## Required for Kubernetes health monitoring as specified in section 3.2.3
+probes:
+  # Liveness probe checks if the application is running
+  liveness:
+    # Health check endpoint path
+    path: /health/liveness
+    # Time to wait before first probe
+    initialDelaySeconds: 30
+    # How often to perform the probe
+    periodSeconds: 10
+    # Timeout for each probe
+    timeoutSeconds: 5
+    # Number of failures before restarting
+    failureThreshold: 3
+    # Number of successes to be considered healthy
+    successThreshold: 1
+  # Readiness probe checks if the application is ready to receive traffic
+  readiness:
+    # Health check endpoint path
+    path: /health/readiness
+    # Time to wait before first probe
+    initialDelaySeconds: 30
+    # How often to perform the probe
+    periodSeconds: 10
+    # Timeout for each probe
+    timeoutSeconds: 5
+    # Number of failures before marking unready
+    failureThreshold: 3
+    # Number of successes to be considered ready
+    successThreshold: 1
+
+## Horizontal Pod Autoscaler configuration
+## Enables automatic scaling based on CPU and memory metrics
+autoscaling:
+  # Enable autoscaling
+  enabled: true
+  # Minimum number of replicas
+  minReplicas: 2
+  # Maximum number of replicas
+  maxReplicas: 10
+  # Target CPU utilization percentage
+  targetCPUUtilizationPercentage: 80
+  # Target memory utilization percentage
+  targetMemoryUtilizationPercentage: 80
+
+## Security context configuration
+## Implements security best practices with non-root user execution as specified in section 8.5.4
+securityContext:
+  # User ID to run the container
+  runAsUser: 1000
+  # Group ID to run the container
+  runAsGroup: 1000
+  # Group ID for mounted volumes
+  fsGroup: 1000
+  # Ensure container doesn't run as root
+  runAsNonRoot: true
+  # Make root filesystem read-only for security
+  readOnlyRootFilesystem: true
+  # Prevent privilege escalation
+  allowPrivilegeEscalation: false
+
+## Pod annotations
+## Custom annotations to add to the pods
+podAnnotations: {}
+
+## Pod labels
+## Custom labels to add to the pods
+podLabels: {}
+
+## Node selector
+## Constraints for pod scheduling to specific nodes
+nodeSelector: {}
+
+## Tolerations
+## Pod tolerations for node taints
+tolerations: []
+
+## Affinity
+## Pod affinity/anti-affinity rules
+affinity: {}
+
+## Environment variables
+## Non-sensitive configuration passed to the container
+env:
+  # Application configuration
+  APP_NAME: "document-service"
+  APP_VERSION: "1.0.0"
+  LOG_LEVEL: "INFO"
+  PORT: "5000"
+  METRICS_PORT: "9090"
+  ENVIRONMENT: "production"
+  
+  # Python configuration
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+## Secret environment variables (will be stored in a Secret)
+## Sensitive configuration that should not be exposed
+secretEnv:
+  # RabbitMQ credentials
+  # Must be provided for production deployments
+  RABBITMQ_USERNAME: ""
+  RABBITMQ_PASSWORD: ""
+  
+  # S3 credentials
+  # Must be provided for production deployments
+  S3_ACCESS_KEY: ""
+  S3_SECRET_KEY: ""
+
+## RabbitMQ configuration
+## Required for asynchronous communication as specified in section 0.1.3
+rabbitmq:
+  # RabbitMQ service hostname
+  host: "rabbitmq.messaging.svc.cluster.local"
+  # RabbitMQ port
+  port: "5672"
+  # RabbitMQ virtual host
+  vhost: "/"
+  # Exchange name as specified in section 0.1.3
+  exchange: "mca.documents"
+  # Queue name as specified in section 0.1.3
+  queue: "document-processing"
+  # Enable TLS for secure communication
+  useTLS: true
+  # Client certificate authentication
+  clientCert:
+    # Enable client certificate authentication
+    enabled: true
+    # Mount path for certificates
+    mountPath: "/etc/rabbitmq/certs"
+
+## S3 storage configuration
+## Required for document storage with encryption as specified in section 0.1.3
+s3:
+  # S3 endpoint URL
+  endpoint: "s3.amazonaws.com"
+  # AWS region
+  region: "us-east-1"
+  # S3 bucket name as specified in section 0.2.5
+  bucket: "mca-documents-production"
+  # Enable SSL for secure communication
+  useSSL: true
+  # Encryption type (AES-256 as required in section 0.2.6)
+  encryption: "AES256"
+
+## Model configuration
+## Settings for document classification models
+model:
+  # Document classifier types as specified in section 0.2.3
+  classifiers:
+    - "SVM"
+    - "RandomForest"
+  # Classification confidence threshold for 99% accuracy as specified in section 0.1.2
+  confidenceThreshold: 0.95
+  # Model storage path
+  storagePath: "/app/models"
+  # Feature extraction parameters
+  featureExtraction:
+    # Maximum number of features to extract
+    maxFeatures: 10000
+    # N-gram range for text feature extraction
+    nGramRange: "(1, 3)"
+
+## Volume mounts
+## Configuration for mounting volumes in the container
+volumeMounts:
+  # Mount for model data
+  - name: model-data
+    mountPath: /app/models
+    readOnly: true
+  # Mount for temporary storage
+  - name: tmp
+    mountPath: /tmp
+
+## Volumes
+## Configuration for volumes used by the container
+volumes:
+  # Volume for model data
+  - name: model-data
+    emptyDir: {}
+  # Volume for temporary storage
+  - name: tmp
+    emptyDir: {}
+
+## Ingress configuration
+## External access configuration (disabled by default)
+ingress:
+  enabled: false
+  annotations: {}
+  hosts: []
+  tls: []
+
+## Service account configuration
+## Kubernetes identity for the Document Service
+serviceAccount:
+  # Create a service account
+  create: true
+  # Annotations for the service account
+  annotations: {}
+  # Service account name (generated if not specified)
+  name: ""
+
+## Pod disruption budget
+## Ensures high availability during cluster operations
+podDisruptionBudget:
+  # Enable pod disruption budget
+  enabled: true
+  # Minimum number of pods that must be available
+  minAvailable: 1
+
+## Prometheus ServiceMonitor configuration
+## Monitoring setup for the Document Service
+serviceMonitor:
+  # Enable Prometheus monitoring
+  enabled: true
+  # Scrape interval
+  interval: 15s
+  # Scrape timeout
+  scrapeTimeout: 10s
+  # Namespace for the ServiceMonitor
+  namespace: ""
+  # Metrics endpoint path
+  path: /metrics
+  # Port name for metrics
+  port: metrics

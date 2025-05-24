@@ -1,0 +1,60 @@
+# OCR Service Test Data - Tables .gitignore
+#
+# This file specifies which document files should be excluded from version control
+# to prevent repository bloat while ensuring that documentation and configuration
+# files are properly tracked.
+
+# Exclude all binary document files by default
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude large data files
+*.zip
+*.ZIP
+*.tar.gz
+*.TAR.GZ
+
+# Exclude temporary files
+*.tmp
+*~
+
+# Keep all README files and documentation
+!README.md
+!README.txt
+!*.md
+
+# Keep configuration files
+!*.json
+!*.yaml
+!*.yml
+!*.config
+
+# Keep metadata files
+!metadata.csv
+!table_definitions.csv
+!annotations.csv
+
+# INSTRUCTIONS FOR TEST DOCUMENTS WITH TABULAR DATA
+#
+# The actual test documents containing tables are not stored in the Git repository to avoid bloat.
+# To obtain the test documents for development and testing:
+#
+# 1. Download the tabular test document package from the secure S3 bucket:
+#    s3://mca-documents-staging/test-data/tables.zip
+#
+# 2. Extract the package to this directory, preserving the folder structure
+#
+# 3. Run the verification script to ensure all required test documents are present:
+#    python ../../verify_test_data.py tables
+#
+# For more information, see the README.md file in this directory.

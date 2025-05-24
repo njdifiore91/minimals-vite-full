@@ -1,0 +1,229 @@
+# Document Service CI/CD Build Configuration
+# Implements the build pipeline for the Document Service microservice
+# Requires Python ≥3.13.3 and Poetry for dependency management
+
+name: Document Service Build Pipeline
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'document-service/**'
+      - 'infrastructure/ci/services/document-service/build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'document-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+# Global environment variables
+env:
+  PYTHON_VERSION: '3.13.3'
+  POETRY_VERSION: '1.7.1'
+  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+  SERVICE_NAME: 'document-service'
+  SERVICE_PATH: 'document-service'
+
+jobs:
+  # Code quality and testing
+  quality:
+    name: Code Quality & Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached dependencies
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.SERVICE_PATH }}/.venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: poetry install --no-interaction --no-root
+
+      - name: Lint with Flake8
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          poetry run flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          poetry run flake8 src/ tests/ --count --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Type check with mypy
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: poetry run mypy src/
+
+      - name: Test with pytest
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: poetry run pytest --cov=src --cov-report=xml
+
+      - name: Validate scikit-learn models
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: poetry run pytest tests/test_models/ -v
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ${{ env.SERVICE_PATH }}/coverage.xml
+          flags: document-service
+          name: document-service-coverage
+
+  # Build and package
+  build:
+    name: Build and Package
+    needs: [quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+
+      - name: Build Python wheel
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: poetry build -f wheel
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: document-service-wheel
+          path: ${{ env.SERVICE_PATH }}/dist/*.whl
+          retention-days: 7
+
+      # Set up Docker Buildx for multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Extract version from pyproject.toml
+      - name: Extract version
+        id: version
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          VERSION=$(poetry version -s)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
+
+      # Build Document Service container image
+      - name: Build and push Document Service
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.SERVICE_PATH }}
+          file: ${{ env.SERVICE_PATH }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            SCIKIT_LEARN_VERSION=1.3.0
+
+      # Scan container image for vulnerabilities
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Deploy to Kubernetes (only on main branch or workflow_dispatch)
+  deploy:
+    name: Deploy to Kubernetes
+    needs: [build]
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Set environment variables
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}" >> $GITHUB_ENV
+
+      # Configure kubectl
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+
+      # Install Helm
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.3'
+
+      # Deploy with Helm
+      - name: Deploy to Kubernetes with Helm
+        run: |
+          # Get the image tag from the build job
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          SERVICE_VERSION=$(grep -m 1 'version' ${{ env.SERVICE_PATH }}/pyproject.toml | awk -F '"' '{print $2}')
+          
+          # Deploy using Helm
+          helm upgrade --install ${{ env.SERVICE_NAME }}-${{ env.ENVIRONMENT }} 
+            ./infrastructure/kubernetes/charts/${{ env.SERVICE_NAME }} 
+            --namespace ${{ env.ENVIRONMENT }} 
+            --create-namespace 
+            --set image.repository=${{ env.REGISTRY }}/${{ env.SERVICE_NAME }} 
+            --set image.tag=${SERVICE_VERSION}-${IMAGE_TAG} 
+            --set environment=${{ env.ENVIRONMENT }} 
+            --values ./infrastructure/kubernetes/charts/${{ env.SERVICE_NAME }}/values-${{ env.ENVIRONMENT }}.yaml
+
+      # Verify deployment
+      - name: Verify deployment
+        run: |
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} --timeout=300s
+          
+          # Check if service is healthy
+          kubectl exec deploy/${{ env.SERVICE_NAME }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8000/health | grep -q '"status":"UP"'
+          
+          echo "Deployment of ${{ env.SERVICE_NAME }} to ${{ env.ENVIRONMENT }} completed successfully"

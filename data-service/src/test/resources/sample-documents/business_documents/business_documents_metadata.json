@@ -1,0 +1,486 @@
+{
+  "version": "1.0.0",
+  "description": "Metadata for sample business documents used in MCA application processing tests",
+  "classification_confidence_threshold": 0.75,
+  "documents": [
+    {
+      "id": "BL-001",
+      "filename": "business_license_ny_acme_corp.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 1,
+      "expected_classification": {
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "dba_name": "ACME CORP",
+        "ein": "12-3456789",
+        "address": {
+          "street": "123 Main Street",
+          "city": "New York",
+          "state": "NY",
+          "zip": "10001"
+        },
+        "license_number": "BL-NY-789456",
+        "issue_date": "2023-01-15",
+        "expiration_date": "2025-01-14",
+        "business_type": "Corporation",
+        "industry": "Retail"
+      }
+    },
+    {
+      "id": "BL-002",
+      "filename": "business_license_ca_sunset_bakery.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 1,
+      "expected_classification": {
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.95
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "dba_name": "SUNSET BAKERY",
+        "ein": "98-7654321",
+        "address": {
+          "street": "456 Ocean Avenue",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94122"
+        },
+        "license_number": "BL-CA-123789",
+        "issue_date": "2022-06-10",
+        "expiration_date": "2024-06-09",
+        "business_type": "LLC",
+        "industry": "Food Service"
+      }
+    },
+    {
+      "id": "TR-001",
+      "filename": "tax_return_2023_acme_corp.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 5,
+      "expected_classification": {
+        "type": "TAX_RETURN",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "ein": "12-3456789",
+        "tax_year": "2023",
+        "filing_type": "1120",
+        "total_revenue": 1250000.00,
+        "total_expenses": 950000.00,
+        "net_income": 300000.00,
+        "tax_paid": 63000.00,
+        "filing_date": "2024-03-15"
+      }
+    },
+    {
+      "id": "TR-002",
+      "filename": "tax_return_2023_sunset_bakery.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 3,
+      "expected_classification": {
+        "type": "TAX_RETURN",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "ein": "98-7654321",
+        "tax_year": "2023",
+        "filing_type": "1065",
+        "total_revenue": 425000.00,
+        "total_expenses": 375000.00,
+        "net_income": 50000.00,
+        "filing_date": "2024-03-10"
+      }
+    },
+    {
+      "id": "BS-001",
+      "filename": "bank_statement_acme_corp_jan2024.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 2,
+      "expected_classification": {
+        "type": "BANK_STATEMENT",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "account_number": "XXXX7890",
+        "bank_name": "First National Bank",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 125678.45,
+        "closing_balance": 142356.78,
+        "total_deposits": 95000.00,
+        "total_withdrawals": 78321.67,
+        "average_daily_balance": 133456.23
+      }
+    },
+    {
+      "id": "BS-002",
+      "filename": "bank_statement_sunset_bakery_jan2024.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 2,
+      "expected_classification": {
+        "type": "BANK_STATEMENT",
+        "confidence": 0.96
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "account_number": "XXXX4567",
+        "bank_name": "Pacific Credit Union",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 45678.90,
+        "closing_balance": 52345.67,
+        "total_deposits": 35000.00,
+        "total_withdrawals": 28333.23,
+        "average_daily_balance": 48765.45
+      }
+    },
+    {
+      "id": "INV-001",
+      "filename": "invoice_acme_corp_12345.pdf",
+      "document_type": "INVOICE",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 1,
+      "expected_classification": {
+        "type": "INVOICE",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "invoice_number": "INV-12345",
+        "invoice_date": "2024-02-15",
+        "due_date": "2024-03-15",
+        "total_amount": 12500.00,
+        "tax_amount": 1000.00,
+        "customer_name": "XYZ Industries",
+        "payment_terms": "Net 30"
+      }
+    },
+    {
+      "id": "INV-002",
+      "filename": "invoice_sunset_bakery_5678.pdf",
+      "document_type": "INVOICE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
+      "expected_classification": {
+        "type": "INVOICE",
+        "confidence": 0.85
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "invoice_number": "INV-5678",
+        "invoice_date": "2024-02-20",
+        "due_date": "2024-03-20",
+        "total_amount": 2500.00,
+        "tax_amount": 200.00,
+        "customer_name": "Local Cafe Chain",
+        "payment_terms": "Net 30"
+      }
+    },
+    {
+      "id": "COI-001",
+      "filename": "certificate_of_incorporation_acme_corp.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 1,
+      "expected_classification": {
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.92
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "ein": "12-3456789",
+        "incorporation_date": "2010-05-12",
+        "state_of_incorporation": "NY",
+        "business_type": "Corporation",
+        "registered_agent": "John Smith",
+        "address": {
+          "street": "123 Main Street",
+          "city": "New York",
+          "state": "NY",
+          "zip": "10001"
+        }
+      }
+    },
+    {
+      "id": "COI-002",
+      "filename": "certificate_of_incorporation_sunset_bakery.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
+      "expected_classification": {
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.78
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "ein": "98-7654321",
+        "incorporation_date": "2018-09-23",
+        "state_of_incorporation": "CA",
+        "business_type": "LLC",
+        "registered_agent": "Maria Rodriguez",
+        "address": {
+          "street": "456 Ocean Avenue",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94122"
+        }
+      }
+    },
+    {
+      "id": "POS-001",
+      "filename": "proof_of_sales_acme_corp_q1_2024.pdf",
+      "document_type": "MISCELLANEOUS",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 3,
+      "expected_classification": {
+        "type": "MISCELLANEOUS",
+        "confidence": 0.85
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "period": "Q1 2024",
+        "total_sales": 325000.00,
+        "credit_card_sales": 275000.00,
+        "cash_sales": 50000.00,
+        "average_monthly_sales": 108333.33,
+        "highest_sales_day": "2024-03-15",
+        "highest_sales_amount": 12500.00
+      }
+    },
+    {
+      "id": "POS-002",
+      "filename": "proof_of_sales_sunset_bakery_q1_2024.pdf",
+      "document_type": "MISCELLANEOUS",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 2,
+      "expected_classification": {
+        "type": "MISCELLANEOUS",
+        "confidence": 0.82
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "period": "Q1 2024",
+        "total_sales": 112500.00,
+        "credit_card_sales": 95000.00,
+        "cash_sales": 17500.00,
+        "average_monthly_sales": 37500.00,
+        "highest_sales_day": "2024-02-14",
+        "highest_sales_amount": 3500.00
+      }
+    },
+    {
+      "id": "BL-003",
+      "filename": "business_license_tx_tech_solutions.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
+      "expected_classification": {
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.73
+      },
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "dba_name": "TECH SOLUTIONS",
+        "ein": "45-6789012",
+        "address": {
+          "street": "789 Technology Parkway",
+          "city": "Austin",
+          "state": "TX",
+          "zip": "78701"
+        },
+        "license_number": "BL-TX-456123",
+        "issue_date": "2023-05-20",
+        "expiration_date": "2025-05-19",
+        "business_type": "Corporation",
+        "industry": "Technology"
+      },
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold)",
+        "flagged_fields": ["license_number", "issue_date"]
+      }
+    },
+    {
+      "id": "TR-003",
+      "filename": "tax_return_2023_tech_solutions_handwritten.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 4,
+      "handwritten": true,
+      "expected_classification": {
+        "type": "TAX_RETURN",
+        "confidence": 0.72
+      },
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "ein": "45-6789012",
+        "tax_year": "2023",
+        "filing_type": "1120",
+        "total_revenue": 875000.00,
+        "total_expenses": 725000.00,
+        "net_income": 150000.00,
+        "tax_paid": 31500.00,
+        "filing_date": "2024-03-12"
+      },
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold) and handwritten content",
+        "flagged_fields": ["total_revenue", "total_expenses", "net_income", "tax_paid"]
+      }
+    },
+    {
+      "id": "BS-003",
+      "filename": "bank_statement_tech_solutions_jan2024_poor_quality.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 2,
+      "expected_classification": {
+        "type": "BANK_STATEMENT",
+        "confidence": 0.71
+      },
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "account_number": "XXXX1234",
+        "bank_name": "Texas Capital Bank",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 87654.32,
+        "closing_balance": 95432.10,
+        "total_deposits": 65000.00,
+        "total_withdrawals": 57222.22,
+        "average_daily_balance": 91543.21
+      },
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold) and poor image quality",
+        "flagged_fields": ["total_deposits", "total_withdrawals", "average_daily_balance"]
+      }
+    }
+  ],
+  "test_scenarios": [
+    {
+      "name": "High Quality Document Processing",
+      "description": "Tests the system's ability to process high-quality business documents with high accuracy",
+      "document_ids": ["BL-001", "TR-001", "BS-001", "INV-001"],
+      "expected_accuracy": 0.99
+    },
+    {
+      "name": "Medium Quality Document Processing",
+      "description": "Tests the system's ability to process medium-quality business documents with acceptable accuracy",
+      "document_ids": ["BL-002", "TR-002", "BS-002", "COI-001", "POS-002"],
+      "expected_accuracy": 0.95
+    },
+    {
+      "name": "Low Quality Document Processing",
+      "description": "Tests the system's ability to process low-quality business documents and flag them for review when necessary",
+      "document_ids": ["INV-002", "COI-002", "BL-003", "TR-003", "BS-003"],
+      "expected_accuracy": 0.85,
+      "expected_human_review_rate": 0.60
+    },
+    {
+      "name": "Mixed Document Batch Processing",
+      "description": "Tests the system's ability to process a mixed batch of business documents with varying quality",
+      "document_ids": ["BL-001", "TR-002", "BS-003", "INV-002", "COI-001", "POS-002"],
+      "expected_accuracy": 0.92,
+      "expected_human_review_rate": 0.20
+    }
+  ],
+  "field_validation_rules": {
+    "legal_name": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_regex": "^[A-Z\\s\\.,&'\\-]+$"
+    },
+    "dba_name": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_regex": "^[A-Z\\s\\.,&'\\-]+$"
+    },
+    "ein": {
+      "required": true,
+      "min_confidence": 0.95,
+      "validation_regex": "^\\d{2}-\\d{7}$"
+    },
+    "address": {
+      "required": true,
+      "min_confidence": 0.85,
+      "nested_fields": {
+        "street": {
+          "required": true,
+          "min_confidence": 0.85
+        },
+        "city": {
+          "required": true,
+          "min_confidence": 0.90
+        },
+        "state": {
+          "required": true,
+          "min_confidence": 0.95,
+          "validation_regex": "^[A-Z]{2}$"
+        },
+        "zip": {
+          "required": true,
+          "min_confidence": 0.90,
+          "validation_regex": "^\\d{5}(-\\d{4})?$"
+        }
+      }
+    },
+    "total_revenue": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "total_expenses": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "net_income": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "incorporation_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    },
+    "issue_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    },
+    "expiration_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    }
+  }
+}

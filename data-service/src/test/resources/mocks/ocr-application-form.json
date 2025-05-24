@@ -1,0 +1,759 @@
+{
+  "documentId": "doc-mca-app-20250522-001",
+  "processingMetadata": {
+    "processingId": "ocr-proc-20250522-001",
+    "processingTimestamp": "2025-05-22T14:30:45.123Z",
+    "processingDurationMs": 1245,
+    "documentType": "application_form",
+    "documentClassification": {
+      "type": "mca_application",
+      "confidence": 0.992,
+      "alternativeClassifications": [
+        { "type": "business_loan_application", "confidence": 0.007 },
+        { "type": "line_of_credit_application", "confidence": 0.001 }
+      ]
+    },
+    "ocrEngine": "TensorFlow 2.15.0",
+    "ocrModelVersion": "mca-form-extractor-v3.2.1",
+    "sourceDocumentFormat": "PDF",
+    "sourceDocumentPageCount": 3,
+    "sourceDocumentQuality": "high",
+    "sourceDocumentS3Path": "s3://mca-documents-staging/applications/2025/05/22/app-form-20250522-001.pdf",
+    "processingStatus": "completed",
+    "processingNotes": []
+  },
+  "extractedData": {
+    "businessInfo": {
+      "legalName": {
+        "value": "Coastal Breeze Cafe LLC",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 210,
+          "x2": 385,
+          "y2": 230
+        }
+      },
+      "dbaName": {
+        "value": "Coastal Breeze Cafe",
+        "confidence": 0.995,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 250,
+          "x2": 365,
+          "y2": 270
+        }
+      },
+      "entityType": {
+        "value": "LLC",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 290,
+          "x2": 185,
+          "y2": 310
+        }
+      },
+      "taxId": {
+        "value": "83-2947561",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 330,
+          "x2": 245,
+          "y2": 350
+        }
+      },
+      "businessStartDate": {
+        "value": "2020-06-15",
+        "confidence": 0.994,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 370,
+          "x2": 245,
+          "y2": 390
+        }
+      },
+      "industry": {
+        "value": "Restaurant",
+        "confidence": 0.996,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 410,
+          "x2": 245,
+          "y2": 430
+        }
+      },
+      "naicsCode": {
+        "value": "722511",
+        "confidence": 0.991,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 450,
+          "x2": 225,
+          "y2": 470
+        }
+      },
+      "businessPhone": {
+        "value": "(305) 555-8217",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 490,
+          "x2": 275,
+          "y2": 510
+        }
+      },
+      "businessEmail": {
+        "value": "info@coastalbreezecafe.com",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 530,
+          "x2": 385,
+          "y2": 550
+        }
+      },
+      "businessWebsite": {
+        "value": "www.coastalbreezecafe.com",
+        "confidence": 0.995,
+        "boundingBox": {
+          "page": 1,
+          "x1": 145,
+          "y1": 570,
+          "x2": 365,
+          "y2": 590
+        }
+      }
+    },
+    "businessAddress": {
+      "street": {
+        "value": "1250 Ocean Drive",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 210,
+          "x2": 625,
+          "y2": 230
+        }
+      },
+      "city": {
+        "value": "Miami Beach",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 250,
+          "x2": 585,
+          "y2": 270
+        }
+      },
+      "state": {
+        "value": "FL",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 290,
+          "x2": 505,
+          "y2": 310
+        }
+      },
+      "zipCode": {
+        "value": "33139",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 330,
+          "x2": 545,
+          "y2": 350
+        }
+      },
+      "propertyType": {
+        "value": "Leased",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 370,
+          "x2": 545,
+          "y2": 390
+        }
+      },
+      "monthlyRent": {
+        "value": "5200.00",
+        "confidence": 0.995,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 410,
+          "x2": 565,
+          "y2": 430
+        }
+      },
+      "leaseExpirationDate": {
+        "value": "2027-06-30",
+        "confidence": 0.993,
+        "boundingBox": {
+          "page": 1,
+          "x1": 485,
+          "y1": 450,
+          "x2": 585,
+          "y2": 470
+        }
+      }
+    },
+    "ownerInfo": {
+      "primaryOwner": {
+        "name": {
+          "value": "Maria Rodriguez",
+          "confidence": 0.998,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 210,
+            "x2": 295,
+            "y2": 230
+          }
+        },
+        "title": {
+          "value": "CEO",
+          "confidence": 0.999,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 250,
+            "x2": 185,
+            "y2": 270
+          }
+        },
+        "ownershipPercentage": {
+          "value": "75",
+          "confidence": 0.999,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 290,
+            "x2": 175,
+            "y2": 310
+          }
+        },
+        "ssn": {
+          "value": "XXX-XX-7890",
+          "confidence": 0.997,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 330,
+            "x2": 245,
+            "y2": 350
+          }
+        },
+        "dateOfBirth": {
+          "value": "1985-09-12",
+          "confidence": 0.996,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 370,
+            "x2": 245,
+            "y2": 390
+          }
+        },
+        "phoneNumber": {
+          "value": "(305) 555-3492",
+          "confidence": 0.998,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 410,
+            "x2": 275,
+            "y2": 430
+          }
+        },
+        "email": {
+          "value": "maria@coastalbreezecafe.com",
+          "confidence": 0.997,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 450,
+            "x2": 385,
+            "y2": 470
+          }
+        },
+        "address": {
+          "street": {
+            "value": "1100 Bay Drive, Apt 2405",
+            "confidence": 0.995,
+            "boundingBox": {
+              "page": 2,
+              "x1": 145,
+              "y1": 490,
+              "x2": 345,
+              "y2": 510
+            }
+          },
+          "city": {
+            "value": "Miami Beach",
+            "confidence": 0.998,
+            "boundingBox": {
+              "page": 2,
+              "x1": 145,
+              "y1": 530,
+              "x2": 245,
+              "y2": 550
+            }
+          },
+          "state": {
+            "value": "FL",
+            "confidence": 0.999,
+            "boundingBox": {
+              "page": 2,
+              "x1": 145,
+              "y1": 570,
+              "x2": 165,
+              "y2": 590
+            }
+          },
+          "zipCode": {
+            "value": "33139",
+            "confidence": 0.998,
+            "boundingBox": {
+              "page": 2,
+              "x1": 145,
+              "y1": 610,
+              "x2": 205,
+              "y2": 630
+            }
+          }
+        },
+        "creditScore": {
+          "value": "742",
+          "confidence": 0.994,
+          "boundingBox": {
+            "page": 2,
+            "x1": 145,
+            "y1": 650,
+            "x2": 185,
+            "y2": 670
+          }
+        }
+      },
+      "secondaryOwner": {
+        "name": {
+          "value": "Carlos Mendez",
+          "confidence": 0.997,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 210,
+            "x2": 615,
+            "y2": 230
+          }
+        },
+        "title": {
+          "value": "CFO",
+          "confidence": 0.999,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 250,
+            "x2": 525,
+            "y2": 270
+          }
+        },
+        "ownershipPercentage": {
+          "value": "25",
+          "confidence": 0.999,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 290,
+            "x2": 515,
+            "y2": 310
+          }
+        },
+        "ssn": {
+          "value": "XXX-XX-4567",
+          "confidence": 0.996,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 330,
+            "x2": 585,
+            "y2": 350
+          }
+        },
+        "dateOfBirth": {
+          "value": "1983-04-25",
+          "confidence": 0.995,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 370,
+            "x2": 585,
+            "y2": 390
+          }
+        },
+        "phoneNumber": {
+          "value": "(305) 555-7821",
+          "confidence": 0.997,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 410,
+            "x2": 615,
+            "y2": 430
+          }
+        },
+        "email": {
+          "value": "carlos@coastalbreezecafe.com",
+          "confidence": 0.996,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 450,
+            "x2": 725,
+            "y2": 470
+          }
+        },
+        "address": {
+          "street": {
+            "value": "950 Collins Avenue, Unit 304",
+            "confidence": 0.994,
+            "boundingBox": {
+              "page": 2,
+              "x1": 485,
+              "y1": 490,
+              "x2": 705,
+              "y2": 510
+            }
+          },
+          "city": {
+            "value": "Miami Beach",
+            "confidence": 0.998,
+            "boundingBox": {
+              "page": 2,
+              "x1": 485,
+              "y1": 530,
+              "x2": 585,
+              "y2": 550
+            }
+          },
+          "state": {
+            "value": "FL",
+            "confidence": 0.999,
+            "boundingBox": {
+              "page": 2,
+              "x1": 485,
+              "y1": 570,
+              "x2": 505,
+              "y2": 590
+            }
+          },
+          "zipCode": {
+            "value": "33139",
+            "confidence": 0.998,
+            "boundingBox": {
+              "page": 2,
+              "x1": 485,
+              "y1": 610,
+              "x2": 545,
+              "y2": 630
+            }
+          }
+        },
+        "creditScore": {
+          "value": "728",
+          "confidence": 0.993,
+          "boundingBox": {
+            "page": 2,
+            "x1": 485,
+            "y1": 650,
+            "x2": 525,
+            "y2": 670
+          }
+        }
+      }
+    },
+    "financialInfo": {
+      "monthlyRevenue": {
+        "value": "87500.00",
+        "confidence": 0.996,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 210,
+          "x2": 245,
+          "y2": 230
+        }
+      },
+      "annualRevenue": {
+        "value": "1050000.00",
+        "confidence": 0.995,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 250,
+          "x2": 265,
+          "y2": 270
+        }
+      },
+      "timeInBusiness": {
+        "value": "5",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 290,
+          "x2": 155,
+          "y2": 310
+        }
+      },
+      "timeInBusinessUnit": {
+        "value": "years",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 3,
+          "x1": 165,
+          "y1": 290,
+          "x2": 215,
+          "y2": 310
+        }
+      },
+      "numberOfEmployees": {
+        "value": "18",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 330,
+          "x2": 165,
+          "y2": 350
+        }
+      },
+      "businessBankName": {
+        "value": "First National Bank",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 370,
+          "x2": 315,
+          "y2": 390
+        }
+      },
+      "businessBankAccountNumber": {
+        "value": "XXXX7845",
+        "confidence": 0.994,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 410,
+          "x2": 245,
+          "y2": 430
+        }
+      },
+      "businessBankRoutingNumber": {
+        "value": "067891234",
+        "confidence": 0.993,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 450,
+          "x2": 245,
+          "y2": 470
+        }
+      },
+      "averageBankBalance": {
+        "value": "42500.00",
+        "confidence": 0.995,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 490,
+          "x2": 235,
+          "y2": 510
+        }
+      },
+      "creditCardProcessingVolume": {
+        "value": "65000.00",
+        "confidence": 0.994,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 530,
+          "x2": 245,
+          "y2": 550
+        }
+      },
+      "creditCardProcessor": {
+        "value": "Square",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 3,
+          "x1": 145,
+          "y1": 570,
+          "x2": 205,
+          "y2": 590
+        }
+      }
+    },
+    "fundingRequest": {
+      "requestedAmount": {
+        "value": "150000.00",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 210,
+          "x2": 585,
+          "y2": 230
+        }
+      },
+      "fundingPurpose": {
+        "value": "Equipment purchase and renovation",
+        "confidence": 0.992,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 250,
+          "x2": 745,
+          "y2": 270
+        }
+      },
+      "existingLoan": {
+        "value": "No",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 290,
+          "x2": 515,
+          "y2": 310
+        }
+      },
+      "preferredTermMonths": {
+        "value": "18",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 330,
+          "x2": 505,
+          "y2": 350
+        }
+      },
+      "preferredPaymentFrequency": {
+        "value": "Daily",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 370,
+          "x2": 535,
+          "y2": 390
+        }
+      }
+    },
+    "applicationInfo": {
+      "applicationDate": {
+        "value": "2025-05-21",
+        "confidence": 0.998,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 450,
+          "x2": 585,
+          "y2": 470
+        }
+      },
+      "referralSource": {
+        "value": "Website",
+        "confidence": 0.996,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 490,
+          "x2": 555,
+          "y2": 510
+        }
+      },
+      "agreementToTerms": {
+        "value": "Yes",
+        "confidence": 0.999,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 530,
+          "x2": 515,
+          "y2": 550
+        }
+      },
+      "digitalSignature": {
+        "value": "Maria Rodriguez",
+        "confidence": 0.991,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 570,
+          "x2": 635,
+          "y2": 590
+        }
+      },
+      "signatureDate": {
+        "value": "2025-05-21",
+        "confidence": 0.997,
+        "boundingBox": {
+          "page": 3,
+          "x1": 485,
+          "y1": 610,
+          "x2": 585,
+          "y2": 630
+        }
+      }
+    }
+  },
+  "extractionStatistics": {
+    "totalFieldsAttempted": 62,
+    "totalFieldsExtracted": 62,
+    "totalFieldsWithHighConfidence": 60,
+    "totalFieldsWithMediumConfidence": 2,
+    "totalFieldsWithLowConfidence": 0,
+    "averageConfidenceScore": 0.9965,
+    "lowestConfidenceField": "digitalSignature",
+    "lowestConfidenceScore": 0.991,
+    "processingTimeBreakdown": {
+      "documentPreprocessing": 125,
+      "textRecognition": 845,
+      "fieldExtraction": 215,
+      "postProcessing": 60
+    }
+  },
+  "validationResults": {
+    "validationStatus": "passed",
+    "validationNotes": [],
+    "schemaVersion": "mca-application-schema-v2.1",
+    "requiredFieldsPresent": true,
+    "fieldFormatValidation": {
+      "status": "passed",
+      "details": []
+    },
+    "businessRuleValidation": {
+      "status": "passed",
+      "details": []
+    }
+  }
+}

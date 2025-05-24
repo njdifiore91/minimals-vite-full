@@ -1,0 +1,1271 @@
+{
+  "version": "1.0.0",
+  "description": "Master metadata file for all sample documents used in MCA application processing system testing",
+  "last_updated": "2025-05-23",
+  "document_categories": [
+    "APPLICATION_FORMS",
+    "FINANCIAL_DOCUMENTS",
+    "IDENTITY_DOCUMENTS",
+    "BUSINESS_DOCUMENTS"
+  ],
+  "document_formats": [
+    "PDF",
+    "JPEG",
+    "PNG",
+    "TIFF"
+  ],
+  "text_types": [
+    "TYPED",
+    "HANDWRITTEN",
+    "MIXED"
+  ],
+  "quality_levels": [
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+    "DAMAGED"
+  ],
+  "document_count": {
+    "total": 120,
+    "by_category": {
+      "APPLICATION_FORMS": 25,
+      "FINANCIAL_DOCUMENTS": 35,
+      "IDENTITY_DOCUMENTS": 30,
+      "BUSINESS_DOCUMENTS": 30
+    }
+  },
+  "category_metadata_files": {
+    "APPLICATION_FORMS": "application_forms/application_forms_metadata.json",
+    "FINANCIAL_DOCUMENTS": "financial_documents/financial_documents_metadata.json",
+    "IDENTITY_DOCUMENTS": "identity_documents/identity_documents_metadata.json",
+    "BUSINESS_DOCUMENTS": "business_documents/business_documents_metadata.json"
+  },
+  "confidence_thresholds": {
+    "high_confidence": 0.90,
+    "medium_confidence": 0.75,
+    "low_confidence": 0.60,
+    "human_review_threshold": 0.75,
+    "classification_threshold": 0.85,
+    "extraction_threshold": 0.80
+  },
+  "test_parameters": {
+    "typed_text_accuracy_target": 0.98,
+    "handwritten_text_accuracy_target": 0.85,
+    "mixed_text_accuracy_target": 0.90,
+    "classification_accuracy_target": 0.95,
+    "field_extraction_accuracy_target": 0.95,
+    "overall_accuracy_target": 0.99
+  },
+  "sample_document_sets": [
+    {
+      "set_id": "complete_application_set_001",
+      "description": "Complete set of documents for a standard MCA application",
+      "documents": [
+        "application_forms/mca_application_standard_001.pdf",
+        "financial_documents/bank_statement_acme_april_001.pdf",
+        "financial_documents/bank_statement_acme_may_002.pdf",
+        "financial_documents/bank_statement_acme_june_003.pdf",
+        "financial_documents/processing_statement_acme_april_004.pdf",
+        "financial_documents/processing_statement_acme_may_005.pdf",
+        "financial_documents/processing_statement_acme_june_006.pdf",
+        "identity_documents/drivers_license_ca_standard.pdf",
+        "business_documents/business_license_state_high_001.pdf"
+      ],
+      "expected_processing_time": 240,
+      "expected_automation_level": 0.95,
+      "expected_accuracy": 0.98
+    },
+    {
+      "set_id": "partial_application_set_002",
+      "description": "Partial set of documents with some missing items",
+      "documents": [
+        "application_forms/mca_application_partial_002.pdf",
+        "financial_documents/bank_statement_metro_april_007.pdf",
+        "financial_documents/bank_statement_metro_may_008.pdf",
+        "identity_documents/drivers_license_ny_standard.pdf"
+      ],
+      "expected_processing_time": 180,
+      "expected_automation_level": 0.85,
+      "expected_accuracy": 0.96
+    },
+    {
+      "set_id": "low_quality_application_set_003",
+      "description": "Complete set of documents with low quality scans",
+      "documents": [
+        "application_forms/mca_application_low_quality_003.pdf",
+        "financial_documents/bank_statement_coastal_april_low_009.pdf",
+        "financial_documents/bank_statement_coastal_may_low_010.pdf",
+        "financial_documents/bank_statement_coastal_june_low_011.pdf",
+        "financial_documents/processing_statement_coastal_april_low_012.pdf",
+        "financial_documents/processing_statement_coastal_may_low_013.pdf",
+        "financial_documents/processing_statement_coastal_june_low_014.pdf",
+        "identity_documents/drivers_license_tx_low_quality.pdf",
+        "business_documents/business_license_local_medium_002.pdf"
+      ],
+      "expected_processing_time": 300,
+      "expected_automation_level": 0.75,
+      "expected_accuracy": 0.92
+    },
+    {
+      "set_id": "handwritten_application_set_004",
+      "description": "Application set with handwritten forms",
+      "documents": [
+        "application_forms/mca_application_handwritten_004.pdf",
+        "financial_documents/bank_statement_sunrise_april_015.pdf",
+        "financial_documents/bank_statement_sunrise_may_016.pdf",
+        "financial_documents/bank_statement_sunrise_june_017.pdf",
+        "identity_documents/drivers_license_application_handwritten.pdf",
+        "business_documents/tax_return_federal_high_005.pdf"
+      ],
+      "expected_processing_time": 360,
+      "expected_automation_level": 0.70,
+      "expected_accuracy": 0.90
+    }
+  ],
+  "document_classification_rules": {
+    "application_form": {
+      "required_fields": ["business_name", "owner_name", "requested_amount", "signature"],
+      "common_keywords": ["application", "merchant", "cash advance", "funding", "request"]
+    },
+    "bank_statement": {
+      "required_fields": ["account_number", "business_name", "statement_period", "ending_balance"],
+      "common_keywords": ["bank", "statement", "account", "balance", "deposit", "withdrawal"]
+    },
+    "processing_statement": {
+      "required_fields": ["merchant_id", "business_name", "statement_period", "processing_volume"],
+      "common_keywords": ["merchant", "processing", "credit card", "transaction", "volume"]
+    },
+    "drivers_license": {
+      "required_fields": ["license_number", "full_name", "date_of_birth", "expiration_date"],
+      "common_keywords": ["driver", "license", "operator", "class", "restrictions"]
+    },
+    "business_license": {
+      "required_fields": ["license_number", "business_name", "issue_date", "expiration_date"],
+      "common_keywords": ["business", "license", "permit", "authorized", "jurisdiction"]
+    }
+  },
+  "field_validation_rules": {
+    "date_fields": {
+      "formats": ["MM/DD/YYYY", "YYYY-MM-DD", "DD MMM YYYY"],
+      "validation_rules": {
+        "not_future": ["issue_date", "statement_date", "date_of_birth"],
+        "future_required": ["expiration_date"],
+        "age_verification": {
+          "field": "date_of_birth",
+          "min_age": 18,
+          "max_age": 100
+        }
+      }
+    },
+    "currency_fields": {
+      "formats": ["$#,###.##", "#,###.##"],
+      "validation_rules": {
+        "positive_required": ["requested_amount", "processing_volume", "ending_balance"],
+        "range_validation": {
+          "requested_amount": {
+            "min": 5000,
+            "max": 500000
+          },
+          "processing_volume": {
+            "min": 1000,
+            "max": 10000000
+          }
+        }
+      }
+    },
+    "identification_fields": {
+      "validation_rules": {
+        "format_validation": {
+          "ein": "##-#######",
+          "ssn_last_four": "####",
+          "phone": "(###) ###-####"
+        },
+        "length_validation": {
+          "license_number": {
+            "min": 6,
+            "max": 20
+          },
+          "account_number": {
+            "min": 8,
+            "max": 17
+          }
+        }
+      }
+    }
+  },
+  "pii_fields": [
+    "ssn", 
+    "ssn_last_four", 
+    "date_of_birth", 
+    "license_number", 
+    "passport_number", 
+    "account_number", 
+    "full_name", 
+    "address", 
+    "phone_number", 
+    "email"
+  ],
+  "test_scenarios": [
+    {
+      "scenario_id": "standard_processing_001",
+      "description": "Standard application processing with high quality documents",
+      "document_set": "complete_application_set_001",
+      "expected_results": {
+        "application_status": "APPROVED",
+        "processing_time": "< 5 minutes",
+        "automation_level": "> 93%",
+        "extraction_accuracy": "> 99%",
+        "human_review_required": false
+      }
+    },
+    {
+      "scenario_id": "partial_processing_002",
+      "description": "Partial application processing with missing documents",
+      "document_set": "partial_application_set_002",
+      "expected_results": {
+        "application_status": "PENDING_DOCUMENTS",
+        "processing_time": "< 3 minutes",
+        "automation_level": "> 90%",
+        "extraction_accuracy": "> 95%",
+        "human_review_required": false
+      }
+    },
+    {
+      "scenario_id": "low_quality_processing_003",
+      "description": "Application processing with low quality documents",
+      "document_set": "low_quality_application_set_003",
+      "expected_results": {
+        "application_status": "PENDING_REVIEW",
+        "processing_time": "< 5 minutes",
+        "automation_level": "> 75%",
+        "extraction_accuracy": "> 90%",
+        "human_review_required": true
+      }
+    },
+    {
+      "scenario_id": "handwritten_processing_004",
+      "description": "Application processing with handwritten documents",
+      "document_set": "handwritten_application_set_004",
+      "expected_results": {
+        "application_status": "PENDING_REVIEW",
+        "processing_time": "< 6 minutes",
+        "automation_level": "> 70%",
+        "extraction_accuracy": "> 85%",
+        "human_review_required": true
+      }
+    }
+  ],
+  "performance_benchmarks": {
+    "document_classification": {
+      "average_time_ms": 250,
+      "p95_time_ms": 500,
+      "accuracy_target": 0.95
+    },
+    "data_extraction": {
+      "average_time_ms": 1500,
+      "p95_time_ms": 3000,
+      "accuracy_target": 0.99
+    },
+    "application_processing": {
+      "average_time_sec": 180,
+      "p95_time_sec": 270,
+      "automation_target": 0.93
+    }
+  },
+  "document_processing_metrics": {
+    "accuracy_metrics": {
+      "overall_accuracy_target": 0.99,
+      "field_level_accuracy": {
+        "critical_fields": 0.99,
+        "important_fields": 0.95,
+        "standard_fields": 0.90
+      },
+      "critical_fields": [
+        "business_name",
+        "ein",
+        "requested_amount",
+        "signature",
+        "account_number",
+        "ending_balance",
+        "processing_volume",
+        "license_number",
+        "expiration_date"
+      ],
+      "important_fields": [
+        "business_address",
+        "business_type",
+        "monthly_revenue",
+        "owner_name",
+        "statement_period",
+        "transaction_count",
+        "issue_date",
+        "jurisdiction"
+      ]
+    },
+    "processing_time_metrics": {
+      "document_classification": {
+        "target_ms": 300,
+        "max_ms": 500
+      },
+      "data_extraction": {
+        "target_ms": 2000,
+        "max_ms": 5000
+      },
+      "document_validation": {
+        "target_ms": 500,
+        "max_ms": 1000
+      },
+      "end_to_end_processing": {
+        "target_sec": 180,
+        "max_sec": 300
+      }
+    },
+    "quality_impact_factors": {
+      "high_quality": {
+        "expected_accuracy_multiplier": 1.0,
+        "expected_processing_time_multiplier": 1.0
+      },
+      "medium_quality": {
+        "expected_accuracy_multiplier": 0.9,
+        "expected_processing_time_multiplier": 1.2
+      },
+      "low_quality": {
+        "expected_accuracy_multiplier": 0.8,
+        "expected_processing_time_multiplier": 1.5
+      },
+      "damaged": {
+        "expected_accuracy_multiplier": 0.7,
+        "expected_processing_time_multiplier": 2.0
+      }
+    },
+    "text_type_impact_factors": {
+      "typed": {
+        "expected_accuracy_multiplier": 1.0,
+        "expected_processing_time_multiplier": 1.0
+      },
+      "handwritten": {
+        "expected_accuracy_multiplier": 0.85,
+        "expected_processing_time_multiplier": 1.5
+      },
+      "mixed": {
+        "expected_accuracy_multiplier": 0.9,
+        "expected_processing_time_multiplier": 1.3
+      }
+    }
+  },
+  "validation_rules": {
+    "business_validation": {
+      "business_name": {
+        "required": true,
+        "min_length": 3,
+        "max_length": 100
+      },
+      "ein": {
+        "required": true,
+        "pattern": "^\\d{2}-\\d{7}$",
+        "error_message": "EIN must be in format XX-XXXXXXX"
+      },
+      "business_type": {
+        "required": true,
+        "allowed_values": [
+          "Sole Proprietorship",
+          "Partnership",
+          "Limited Liability Company",
+          "Corporation",
+          "S Corporation",
+          "C Corporation",
+          "Non-Profit"
+        ]
+      },
+      "years_in_business": {
+        "required": true,
+        "min_value": 1,
+        "type": "integer"
+      },
+      "monthly_revenue": {
+        "required": true,
+        "min_value": 5000,
+        "type": "currency"
+      },
+      "requested_amount": {
+        "required": true,
+        "min_value": 5000,
+        "max_value": 500000,
+        "type": "currency"
+      }
+    },
+    "financial_validation": {
+      "account_number": {
+        "required": true,
+        "min_length": 4,
+        "max_length": 17
+      },
+      "statement_period": {
+        "required": true,
+        "pattern": "^[A-Za-z]{3} \\d{1,2}, \\d{4} - [A-Za-z]{3} \\d{1,2}, \\d{4}$|^\\d{1,2}/\\d{1,2}/\\d{4} - \\d{1,2}/\\d{1,2}/\\d{4}$",
+        "error_message": "Statement period must be in format 'MMM DD, YYYY - MMM DD, YYYY' or 'MM/DD/YYYY - MM/DD/YYYY'"
+      },
+      "ending_balance": {
+        "required": true,
+        "type": "currency"
+      },
+      "processing_volume": {
+        "required": true,
+        "min_value": 1000,
+        "type": "currency"
+      },
+      "transaction_count": {
+        "required": true,
+        "min_value": 1,
+        "type": "integer"
+      }
+    },
+    "identity_validation": {
+      "full_name": {
+        "required": true,
+        "min_length": 3,
+        "max_length": 100
+      },
+      "date_of_birth": {
+        "required": true,
+        "pattern": "^\\d{1,2}/\\d{1,2}/\\d{4}$",
+        "min_age": 18,
+        "max_age": 100,
+        "error_message": "Date of birth must be in format MM/DD/YYYY and represent an age between 18 and 100"
+      },
+      "license_number": {
+        "required": true,
+        "min_length": 6,
+        "max_length": 20
+      },
+      "expiration_date": {
+        "required": true,
+        "pattern": "^\\d{1,2}/\\d{1,2}/\\d{4}$|^\\d{4}-\\d{1,2}-\\d{1,2}$",
+        "future_date": true,
+        "error_message": "Expiration date must be in the future"
+      }
+    },
+    "cross_document_validation": {
+      "business_name_consistency": {
+        "fields": ["business_name"],
+        "documents": ["APPLICATION_FORM", "FINANCIAL_DOCUMENT", "BUSINESS_DOCUMENT"],
+        "match_threshold": 0.9,
+        "error_message": "Business name must be consistent across all documents"
+      },
+      "address_consistency": {
+        "fields": ["business_address"],
+        "documents": ["APPLICATION_FORM", "FINANCIAL_DOCUMENT", "BUSINESS_DOCUMENT"],
+        "match_threshold": 0.8,
+        "error_message": "Business address must be consistent across all documents"
+      },
+      "owner_identity_verification": {
+        "application_field": "owner_name",
+        "identity_field": "full_name",
+        "match_threshold": 0.9,
+        "error_message": "Owner name on application must match name on identity document"
+      },
+      "financial_data_consistency": {
+        "monthly_revenue": {
+          "application_field": "monthly_revenue",
+          "financial_field": "processing_volume",
+          "max_variance": 0.3,
+          "error_message": "Monthly revenue on application should be consistent with processing volume"
+        }
+      }
+    }
+  },
+  "integration_test_mappings": {
+    "email_service_tests": [
+      "complete_application_set_001",
+      "partial_application_set_002"
+    ],
+    "document_service_tests": [
+      "complete_application_set_001",
+      "low_quality_application_set_003"
+    ],
+    "ocr_service_tests": [
+      "complete_application_set_001",
+      "low_quality_application_set_003",
+      "handwritten_application_set_004"
+    ],
+    "data_service_tests": [
+      "complete_application_set_001",
+      "partial_application_set_002",
+      "low_quality_application_set_003",
+      "handwritten_application_set_004"
+    ],
+    "notification_service_tests": [
+      "complete_application_set_001",
+      "partial_application_set_002"
+    ]
+  },
+  "sample_document_details": {
+    "application_forms": {
+      "mca_application_standard_001": {
+        "document_type": "APPLICATION_FORM",
+        "document_subtype": "MCA_STANDARD",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "business_name": {
+            "value": "Acme Business Solutions LLC",
+            "confidence": 0.98,
+            "bounding_box": [120, 150, 450, 175]
+          },
+          "dba_name": {
+            "value": "Acme Solutions",
+            "confidence": 0.97,
+            "bounding_box": [120, 200, 350, 225]
+          },
+          "business_address": {
+            "value": "123 Commerce St, Suite 400, New York, NY 10001",
+            "confidence": 0.96,
+            "bounding_box": [120, 250, 550, 275]
+          },
+          "business_phone": {
+            "value": "(212) 555-1234",
+            "confidence": 0.98,
+            "bounding_box": [120, 300, 250, 325]
+          },
+          "business_email": {
+            "value": "info@acmesolutions.com",
+            "confidence": 0.97,
+            "bounding_box": [350, 300, 550, 325]
+          },
+          "ein": {
+            "value": "12-3456789",
+            "confidence": 0.99,
+            "bounding_box": [120, 350, 220, 375]
+          },
+          "business_type": {
+            "value": "Limited Liability Company",
+            "confidence": 0.98,
+            "bounding_box": [350, 350, 550, 375]
+          },
+          "years_in_business": {
+            "value": "5",
+            "confidence": 0.99,
+            "bounding_box": [120, 400, 150, 425]
+          },
+          "monthly_revenue": {
+            "value": "125,000.00",
+            "confidence": 0.97,
+            "bounding_box": [350, 400, 450, 425]
+          },
+          "requested_amount": {
+            "value": "50,000.00",
+            "confidence": 0.98,
+            "bounding_box": [120, 450, 220, 475]
+          },
+          "use_of_funds": {
+            "value": "Expansion and inventory",
+            "confidence": 0.96,
+            "bounding_box": [350, 450, 550, 475]
+          },
+          "owner_name": {
+            "value": "John A. Smith",
+            "confidence": 0.98,
+            "bounding_box": [120, 500, 300, 525]
+          },
+          "owner_title": {
+            "value": "CEO",
+            "confidence": 0.99,
+            "bounding_box": [350, 500, 400, 525]
+          },
+          "owner_phone": {
+            "value": "(917) 555-5678",
+            "confidence": 0.97,
+            "bounding_box": [120, 550, 250, 575]
+          },
+          "owner_email": {
+            "value": "john.smith@acmesolutions.com",
+            "confidence": 0.96,
+            "bounding_box": [350, 550, 600, 575]
+          },
+          "signature": {
+            "value": "John Smith",
+            "confidence": 0.95,
+            "bounding_box": [120, 650, 300, 675]
+          },
+          "signature_date": {
+            "value": "2023-05-15",
+            "confidence": 0.98,
+            "bounding_box": [350, 650, 450, 675]
+          }
+        },
+        "expected_classification": {
+          "type": "APPLICATION_FORM",
+          "subtype": "MCA_STANDARD",
+          "confidence": 0.98
+        }
+      },
+      "mca_application_handwritten_004": {
+        "document_type": "APPLICATION_FORM",
+        "document_subtype": "MCA_STANDARD",
+        "format": "PDF",
+        "text_type": "HANDWRITTEN",
+        "quality": "MEDIUM",
+        "expected_fields": {
+          "business_name": {
+            "value": "Sunrise Healthcare Services",
+            "confidence": 0.85,
+            "bounding_box": [120, 150, 450, 175]
+          },
+          "dba_name": {
+            "value": "Sunrise Healthcare",
+            "confidence": 0.84,
+            "bounding_box": [120, 200, 350, 225]
+          },
+          "business_address": {
+            "value": "456 Medical Parkway, Minneapolis, MN 55401",
+            "confidence": 0.82,
+            "bounding_box": [120, 250, 550, 275]
+          },
+          "business_phone": {
+            "value": "(612) 555-9876",
+            "confidence": 0.86,
+            "bounding_box": [120, 300, 250, 325]
+          },
+          "business_email": {
+            "value": "info@sunrisehealthcare.com",
+            "confidence": 0.83,
+            "bounding_box": [350, 300, 550, 325]
+          },
+          "ein": {
+            "value": "98-7654321",
+            "confidence": 0.87,
+            "bounding_box": [120, 350, 220, 375]
+          },
+          "business_type": {
+            "value": "Corporation",
+            "confidence": 0.85,
+            "bounding_box": [350, 350, 550, 375]
+          },
+          "years_in_business": {
+            "value": "3",
+            "confidence": 0.89,
+            "bounding_box": [120, 400, 150, 425]
+          },
+          "monthly_revenue": {
+            "value": "85,000.00",
+            "confidence": 0.84,
+            "bounding_box": [350, 400, 450, 425]
+          },
+          "requested_amount": {
+            "value": "35,000.00",
+            "confidence": 0.85,
+            "bounding_box": [120, 450, 220, 475]
+          },
+          "use_of_funds": {
+            "value": "Equipment purchase",
+            "confidence": 0.82,
+            "bounding_box": [350, 450, 550, 475]
+          },
+          "owner_name": {
+            "value": "Sarah E. Davis",
+            "confidence": 0.86,
+            "bounding_box": [120, 500, 300, 525]
+          },
+          "owner_title": {
+            "value": "President",
+            "confidence": 0.87,
+            "bounding_box": [350, 500, 450, 525]
+          },
+          "owner_phone": {
+            "value": "(612) 555-1234",
+            "confidence": 0.85,
+            "bounding_box": [120, 550, 250, 575]
+          },
+          "owner_email": {
+            "value": "sarah.davis@sunrisehealthcare.com",
+            "confidence": 0.83,
+            "bounding_box": [350, 550, 600, 575]
+          },
+          "signature": {
+            "value": "Sarah Davis",
+            "confidence": 0.80,
+            "bounding_box": [120, 650, 300, 675]
+          },
+          "signature_date": {
+            "value": "2023-06-10",
+            "confidence": 0.84,
+            "bounding_box": [350, 650, 450, 675]
+          }
+        },
+        "expected_classification": {
+          "type": "APPLICATION_FORM",
+          "subtype": "MCA_STANDARD",
+          "confidence": 0.92
+        }
+      },
+      "mca_application_low_quality_003": {
+        "document_type": "APPLICATION_FORM",
+        "document_subtype": "MCA_STANDARD",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "LOW",
+        "expected_fields": {
+          "business_name": {
+            "value": "Coastal Imports LLC",
+            "confidence": 0.84,
+            "bounding_box": [120, 150, 450, 175]
+          },
+          "dba_name": {
+            "value": "Coastal Imports",
+            "confidence": 0.82,
+            "bounding_box": [120, 200, 350, 225]
+          },
+          "business_address": {
+            "value": "789 Harbor Blvd, Miami, FL 33101",
+            "confidence": 0.80,
+            "bounding_box": [120, 250, 550, 275]
+          },
+          "business_phone": {
+            "value": "(305) 555-7890",
+            "confidence": 0.83,
+            "bounding_box": [120, 300, 250, 325]
+          },
+          "business_email": {
+            "value": "info@coastalimports.com",
+            "confidence": 0.81,
+            "bounding_box": [350, 300, 550, 325]
+          },
+          "ein": {
+            "value": "45-6789012",
+            "confidence": 0.85,
+            "bounding_box": [120, 350, 220, 375]
+          },
+          "business_type": {
+            "value": "Limited Liability Company",
+            "confidence": 0.82,
+            "bounding_box": [350, 350, 550, 375]
+          },
+          "years_in_business": {
+            "value": "2",
+            "confidence": 0.86,
+            "bounding_box": [120, 400, 150, 425]
+          },
+          "monthly_revenue": {
+            "value": "95,000.00",
+            "confidence": 0.81,
+            "bounding_box": [350, 400, 450, 425]
+          },
+          "requested_amount": {
+            "value": "40,000.00",
+            "confidence": 0.83,
+            "bounding_box": [120, 450, 220, 475]
+          },
+          "use_of_funds": {
+            "value": "Inventory purchase",
+            "confidence": 0.80,
+            "bounding_box": [350, 450, 550, 475]
+          },
+          "owner_name": {
+            "value": "Maria Rodriguez",
+            "confidence": 0.84,
+            "bounding_box": [120, 500, 300, 525]
+          },
+          "owner_title": {
+            "value": "Owner",
+            "confidence": 0.85,
+            "bounding_box": [350, 500, 400, 525]
+          },
+          "owner_phone": {
+            "value": "(305) 555-1234",
+            "confidence": 0.82,
+            "bounding_box": [120, 550, 250, 575]
+          },
+          "owner_email": {
+            "value": "maria@coastalimports.com",
+            "confidence": 0.80,
+            "bounding_box": [350, 550, 600, 575]
+          },
+          "signature": {
+            "value": "Maria Rodriguez",
+            "confidence": 0.78,
+            "bounding_box": [120, 650, 300, 675]
+          },
+          "signature_date": {
+            "value": "2023-05-20",
+            "confidence": 0.81,
+            "bounding_box": [350, 650, 450, 675]
+          }
+        },
+        "expected_classification": {
+          "type": "APPLICATION_FORM",
+          "subtype": "MCA_STANDARD",
+          "confidence": 0.88
+        }
+      }
+    },
+    "financial_documents": {
+      "bank_statement_acme_april_001": {
+        "document_type": "FINANCIAL_DOCUMENT",
+        "document_subtype": "BANK_STATEMENT",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "business_name": {
+            "value": "Acme Business Solutions LLC",
+            "confidence": 0.99,
+            "bounding_box": [100, 150, 400, 175]
+          },
+          "account_number": {
+            "value": "XXXX-XX-1234",
+            "confidence": 0.98,
+            "bounding_box": [500, 150, 650, 175]
+          },
+          "statement_period": {
+            "value": "Apr 1, 2023 - Apr 30, 2023",
+            "confidence": 0.97,
+            "bounding_box": [100, 200, 400, 225]
+          },
+          "beginning_balance": {
+            "value": "125,750.45",
+            "confidence": 0.98,
+            "bounding_box": [500, 250, 650, 275]
+          },
+          "ending_balance": {
+            "value": "143,250.78",
+            "confidence": 0.98,
+            "bounding_box": [500, 600, 650, 625]
+          },
+          "total_deposits": {
+            "value": "87,500.00",
+            "confidence": 0.97,
+            "bounding_box": [500, 300, 650, 325]
+          },
+          "total_withdrawals": {
+            "value": "69,999.67",
+            "confidence": 0.96,
+            "bounding_box": [500, 350, 650, 375]
+          },
+          "bank_name": {
+            "value": "First National Bank",
+            "confidence": 0.99,
+            "bounding_box": [100, 100, 350, 125]
+          }
+        },
+        "expected_classification": {
+          "type": "FINANCIAL_DOCUMENT",
+          "subtype": "BANK_STATEMENT",
+          "confidence": 0.98
+        }
+      },
+      "bank_statement_coastal_april_low_009": {
+        "document_type": "FINANCIAL_DOCUMENT",
+        "document_subtype": "BANK_STATEMENT",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "LOW",
+        "expected_fields": {
+          "business_name": {
+            "value": "Coastal Imports LLC",
+            "confidence": 0.84,
+            "bounding_box": [100, 150, 400, 175]
+          },
+          "account_number": {
+            "value": "XXXX-XX-5678",
+            "confidence": 0.83,
+            "bounding_box": [500, 150, 650, 175]
+          },
+          "statement_period": {
+            "value": "Apr 1, 2023 - Apr 30, 2023",
+            "confidence": 0.82,
+            "bounding_box": [100, 200, 400, 225]
+          },
+          "beginning_balance": {
+            "value": "85,250.33",
+            "confidence": 0.83,
+            "bounding_box": [500, 250, 650, 275]
+          },
+          "ending_balance": {
+            "value": "92,750.45",
+            "confidence": 0.82,
+            "bounding_box": [500, 600, 650, 625]
+          },
+          "total_deposits": {
+            "value": "45,000.00",
+            "confidence": 0.80,
+            "bounding_box": [500, 300, 650, 325]
+          },
+          "total_withdrawals": {
+            "value": "37,499.88",
+            "confidence": 0.79,
+            "bounding_box": [500, 350, 650, 375]
+          },
+          "bank_name": {
+            "value": "Community Trust Bank",
+            "confidence": 0.85,
+            "bounding_box": [100, 100, 350, 125]
+          }
+        },
+        "expected_classification": {
+          "type": "FINANCIAL_DOCUMENT",
+          "subtype": "BANK_STATEMENT",
+          "confidence": 0.88
+        }
+      },
+      "processing_statement_acme_april_004": {
+        "document_type": "FINANCIAL_DOCUMENT",
+        "document_subtype": "PROCESSING_STATEMENT",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "business_name": {
+            "value": "Acme Business Solutions LLC",
+            "confidence": 0.99,
+            "bounding_box": [200, 150, 500, 175]
+          },
+          "merchant_id": {
+            "value": "MID-987654321",
+            "confidence": 0.98,
+            "bounding_box": [500, 150, 650, 175]
+          },
+          "statement_period": {
+            "value": "Apr 1, 2023 - Apr 30, 2023",
+            "confidence": 0.97,
+            "bounding_box": [200, 200, 500, 225]
+          },
+          "processing_volume": {
+            "value": "125,750.45",
+            "confidence": 0.98,
+            "bounding_box": [500, 250, 650, 275]
+          },
+          "transaction_count": {
+            "value": "1,245",
+            "confidence": 0.99,
+            "bounding_box": [500, 300, 600, 325]
+          },
+          "processing_fees": {
+            "value": "3,772.51",
+            "confidence": 0.97,
+            "bounding_box": [500, 350, 600, 375]
+          },
+          "net_deposit": {
+            "value": "121,977.94",
+            "confidence": 0.98,
+            "bounding_box": [500, 400, 600, 425]
+          },
+          "processor_name": {
+            "value": "Global Payments Inc",
+            "confidence": 0.99,
+            "bounding_box": [200, 100, 450, 125]
+          }
+        },
+        "expected_classification": {
+          "type": "FINANCIAL_DOCUMENT",
+          "subtype": "PROCESSING_STATEMENT",
+          "confidence": 0.98
+        }
+      },
+      "processing_statement_coastal_april_low_012": {
+        "document_type": "FINANCIAL_DOCUMENT",
+        "document_subtype": "PROCESSING_STATEMENT",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "LOW",
+        "expected_fields": {
+          "business_name": {
+            "value": "Coastal Imports LLC",
+            "confidence": 0.85,
+            "bounding_box": [200, 150, 500, 175]
+          },
+          "merchant_id": {
+            "value": "MID-123456789",
+            "confidence": 0.84,
+            "bounding_box": [500, 150, 650, 175]
+          },
+          "statement_period": {
+            "value": "Apr 1, 2023 - Apr 30, 2023",
+            "confidence": 0.82,
+            "bounding_box": [200, 200, 500, 225]
+          },
+          "processing_volume": {
+            "value": "95,250.75",
+            "confidence": 0.83,
+            "bounding_box": [500, 250, 650, 275]
+          },
+          "transaction_count": {
+            "value": "987",
+            "confidence": 0.86,
+            "bounding_box": [500, 300, 600, 325]
+          },
+          "processing_fees": {
+            "value": "2,857.52",
+            "confidence": 0.82,
+            "bounding_box": [500, 350, 600, 375]
+          },
+          "net_deposit": {
+            "value": "92,393.23",
+            "confidence": 0.83,
+            "bounding_box": [500, 400, 600, 425]
+          },
+          "processor_name": {
+            "value": "First Data",
+            "confidence": 0.87,
+            "bounding_box": [200, 100, 450, 125]
+          }
+        },
+        "expected_classification": {
+          "type": "FINANCIAL_DOCUMENT",
+          "subtype": "PROCESSING_STATEMENT",
+          "confidence": 0.88
+        }
+      }
+    },
+    "identity_documents": {
+      "drivers_license_ca_standard": {
+        "document_type": "IDENTITY_DOCUMENT",
+        "document_subtype": "DRIVERS_LICENSE",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "full_name": {
+            "value": "JOHN ALEXANDER SMITH",
+            "confidence": 0.98,
+            "bounding_box": [120, 150, 450, 175]
+          },
+          "address": {
+            "value": "123 MAIN STREET, ANYTOWN, CA 90210",
+            "confidence": 0.96,
+            "bounding_box": [120, 200, 550, 225]
+          },
+          "date_of_birth": {
+            "value": "01/15/1980",
+            "confidence": 0.99,
+            "bounding_box": [120, 250, 220, 275]
+          },
+          "issue_date": {
+            "value": "03/22/2023",
+            "confidence": 0.98,
+            "bounding_box": [120, 300, 220, 325]
+          },
+          "expiration_date": {
+            "value": "01/15/2028",
+            "confidence": 0.99,
+            "bounding_box": [350, 300, 450, 325]
+          },
+          "license_number": {
+            "value": "D1234567",
+            "confidence": 0.99,
+            "bounding_box": [120, 350, 220, 375]
+          },
+          "class": {
+            "value": "C",
+            "confidence": 0.99,
+            "bounding_box": [350, 350, 370, 375]
+          },
+          "restrictions": {
+            "value": "NONE",
+            "confidence": 0.97,
+            "bounding_box": [400, 350, 450, 375]
+          },
+          "sex": {
+            "value": "M",
+            "confidence": 0.99,
+            "bounding_box": [120, 400, 140, 425]
+          },
+          "height": {
+            "value": "5'-10\"",
+            "confidence": 0.98,
+            "bounding_box": [200, 400, 250, 425]
+          },
+          "eye_color": {
+            "value": "BLU",
+            "confidence": 0.98,
+            "bounding_box": [350, 400, 380, 425]
+          }
+        },
+        "expected_classification": {
+          "type": "IDENTITY_DOCUMENT",
+          "subtype": "DRIVERS_LICENSE",
+          "confidence": 0.99
+        }
+      },
+      "drivers_license_tx_low_quality": {
+        "document_type": "IDENTITY_DOCUMENT",
+        "document_subtype": "DRIVERS_LICENSE",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "LOW",
+        "expected_fields": {
+          "full_name": {
+            "value": "ROBERT JAMES WILLIAMS",
+            "confidence": 0.85,
+            "bounding_box": [120, 150, 450, 175]
+          },
+          "address": {
+            "value": "789 OAK STREET, HOUSTON, TX 77002",
+            "confidence": 0.82,
+            "bounding_box": [120, 200, 550, 225]
+          },
+          "date_of_birth": {
+            "value": "11/30/1975",
+            "confidence": 0.88,
+            "bounding_box": [120, 250, 220, 275]
+          },
+          "issue_date": {
+            "value": "12/15/2021",
+            "confidence": 0.84,
+            "bounding_box": [120, 300, 220, 325]
+          },
+          "expiration_date": {
+            "value": "11/30/2029",
+            "confidence": 0.86,
+            "bounding_box": [350, 300, 450, 325]
+          },
+          "license_number": {
+            "value": "12345678",
+            "confidence": 0.89,
+            "bounding_box": [120, 350, 220, 375]
+          },
+          "class": {
+            "value": "C",
+            "confidence": 0.90,
+            "bounding_box": [350, 350, 370, 375]
+          },
+          "restrictions": {
+            "value": "A",
+            "confidence": 0.83,
+            "bounding_box": [400, 350, 420, 375]
+          },
+          "sex": {
+            "value": "M",
+            "confidence": 0.90,
+            "bounding_box": [120, 400, 140, 425]
+          },
+          "height": {
+            "value": "6'-1\"",
+            "confidence": 0.85,
+            "bounding_box": [200, 400, 250, 425]
+          },
+          "eye_color": {
+            "value": "BRN",
+            "confidence": 0.87,
+            "bounding_box": [350, 400, 380, 425]
+          }
+        },
+        "expected_classification": {
+          "type": "IDENTITY_DOCUMENT",
+          "subtype": "DRIVERS_LICENSE",
+          "confidence": 0.92
+        }
+      }
+    },
+    "business_documents": {
+      "business_license_state_high_001": {
+        "document_type": "BUSINESS_DOCUMENT",
+        "document_subtype": "BUSINESS_LICENSE",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "license_number": {
+            "value": "BL-12345-2023",
+            "confidence": 0.99,
+            "bounding_box": [120, 450, 250, 475]
+          },
+          "business_name": {
+            "value": "Acme Business Solutions LLC",
+            "confidence": 0.97,
+            "bounding_box": [120, 300, 450, 325]
+          },
+          "business_type": {
+            "value": "Limited Liability Company",
+            "confidence": 0.96,
+            "bounding_box": [120, 350, 400, 375]
+          },
+          "issue_date": {
+            "value": "2023-01-15",
+            "confidence": 0.95,
+            "bounding_box": [120, 500, 220, 525]
+          },
+          "expiration_date": {
+            "value": "2024-01-14",
+            "confidence": 0.94,
+            "bounding_box": [350, 500, 450, 525]
+          },
+          "business_address": {
+            "value": "123 Commerce St, Suite 400, New York, NY 10001",
+            "confidence": 0.93,
+            "bounding_box": [120, 400, 550, 425]
+          },
+          "jurisdiction": {
+            "value": "New York",
+            "confidence": 0.99,
+            "bounding_box": [120, 550, 220, 575]
+          }
+        },
+        "expected_classification": {
+          "type": "BUSINESS_DOCUMENT",
+          "subtype": "BUSINESS_LICENSE",
+          "confidence": 0.98
+        }
+      },
+      "tax_return_federal_high_005": {
+        "document_type": "BUSINESS_DOCUMENT",
+        "document_subtype": "TAX_RETURN",
+        "format": "PDF",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "expected_fields": {
+          "ein": {
+            "value": "12-3456789",
+            "confidence": 0.99,
+            "bounding_box": [300, 150, 400, 175]
+          },
+          "tax_year": {
+            "value": "2023",
+            "confidence": 0.99,
+            "bounding_box": [500, 150, 550, 175]
+          },
+          "business_name": {
+            "value": "Tech Solutions Inc",
+            "confidence": 0.98,
+            "bounding_box": [300, 200, 550, 225]
+          },
+          "business_address": {
+            "value": "789 Technology Pkwy, San Jose, CA 95110",
+            "confidence": 0.97,
+            "bounding_box": [300, 250, 650, 275]
+          },
+          "business_income": {
+            "value": "2,450,000.00",
+            "confidence": 0.96,
+            "bounding_box": [500, 350, 650, 375]
+          },
+          "total_deductions": {
+            "value": "1,875,000.00",
+            "confidence": 0.95,
+            "bounding_box": [500, 400, 650, 425]
+          },
+          "taxable_income": {
+            "value": "575,000.00",
+            "confidence": 0.97,
+            "bounding_box": [500, 450, 650, 475]
+          },
+          "tax_liability": {
+            "value": "120,750.00",
+            "confidence": 0.96,
+            "bounding_box": [500, 500, 650, 525]
+          },
+          "form_type": {
+            "value": "1120",
+            "confidence": 0.99,
+            "bounding_box": [100, 100, 150, 125]
+          }
+        },
+        "expected_classification": {
+          "type": "BUSINESS_DOCUMENT",
+          "subtype": "TAX_RETURN",
+          "confidence": 0.98
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,263 @@
+# ======================================================
+# EMAIL SERVICE BUILD PIPELINE
+# ======================================================
+# CI/CD workflow configuration for building the Email Service.
+# This pipeline handles dependency installation, code quality checks,
+# unit testing, TypeScript compilation, Docker image creation,
+# security scanning, and image publishing to the container registry.
+#
+# The Email Service is a Node.js microservice that monitors
+# submissions inbox using IMAP protocol as specified in
+# section 0.1.2 of the technical specification.
+# ======================================================
+
+name: Email Service Build
+
+# Define when this workflow should run
+triggers:
+  # Run on changes to email-service code
+  - type: push
+    branches:
+      - main
+      - development
+      - feature/*
+    paths:
+      - email-service/**
+      - infrastructure/ci/services/email-service/**
+  
+  # Run on pull requests affecting email-service
+  - type: pull_request
+    branches:
+      - main
+      - development
+    paths:
+      - email-service/**
+      - infrastructure/ci/services/email-service/**
+  
+  # Run manually
+  - type: manual
+
+# Define environment variables
+variables:
+  # Service information
+  SERVICE_NAME: "email-service"
+  SERVICE_PATH: "./email-service"
+  
+  # Node.js configuration
+  NODE_VERSION: "22.x"
+  NODE_ENV: "development"
+  
+  # Docker configuration
+  DOCKER_REGISTRY: "${CI_REGISTRY}"
+  DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/${SERVICE_NAME}"
+  DOCKER_IMAGE_TAG: "${CI_COMMIT_SHA}"
+  
+  # Cache configuration
+  CACHE_KEY_PREFIX: "deps-node-${SERVICE_NAME}"
+  
+  # Test configuration
+  JEST_JUNIT_OUTPUT_DIR: "./test-reports"
+  COVERAGE_THRESHOLD: 80
+  
+  # Security scanning configuration
+  TRIVY_SEVERITY: "HIGH,CRITICAL"
+  TRIVY_EXIT_CODE: 1
+  TRIVY_TIMEOUT: "10m"
+
+# Define the stages of the pipeline
+stages:
+  - setup
+  - quality
+  - test
+  - build
+  - scan
+  - publish
+
+# Include reusable templates
+include:
+  - project: 'infrastructure/ci/templates'
+    file: 'quality-gates.yml'
+  - project: 'infrastructure/ci/templates'
+    file: 'notification.yml'
+
+# Job definitions
+
+# Setup job - Install dependencies
+setup:
+  stage: setup
+  image: node:${NODE_VERSION}-alpine
+  script:
+    - echo "Setting up Email Service build environment"
+    - cd ${SERVICE_PATH}
+    - npm ci
+  cache:
+    key: ${CACHE_KEY_PREFIX}-${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHA}
+    paths:
+      - ${SERVICE_PATH}/node_modules/
+  artifacts:
+    paths:
+      - ${SERVICE_PATH}/node_modules/
+    expire_in: 1 hour
+
+# Lint job - Run ESLint
+lint:
+  stage: quality
+  image: node:${NODE_VERSION}-alpine
+  needs: [setup]
+  script:
+    - echo "Running ESLint on Email Service code"
+    - cd ${SERVICE_PATH}
+    - npm run lint -- --format junit --output-file ${JEST_JUNIT_OUTPUT_DIR}/eslint.xml
+  artifacts:
+    reports:
+      junit: ${SERVICE_PATH}/${JEST_JUNIT_OUTPUT_DIR}/eslint.xml
+    expire_in: 1 week
+
+# Type check job - Run TypeScript compiler
+type_check:
+  stage: quality
+  image: node:${NODE_VERSION}-alpine
+  needs: [setup]
+  script:
+    - echo "Running TypeScript type checking"
+    - cd ${SERVICE_PATH}
+    - npm run type-check
+
+# Test job - Run Jest tests
+test:
+  stage: test
+  image: node:${NODE_VERSION}-alpine
+  needs: [lint, type_check]
+  script:
+    - echo "Running unit tests with Jest"
+    - cd ${SERVICE_PATH}
+    - npm run test:ci
+  artifacts:
+    reports:
+      junit: ${SERVICE_PATH}/${JEST_JUNIT_OUTPUT_DIR}/junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: ${SERVICE_PATH}/coverage/cobertura-coverage.xml
+    paths:
+      - ${SERVICE_PATH}/${JEST_JUNIT_OUTPUT_DIR}/
+      - ${SERVICE_PATH}/coverage/
+    expire_in: 1 week
+  coverage: '/All files[^|]*\|[^|]*\s+([0-9\.]+)/'
+
+# Build job - Compile TypeScript and build Docker image
+build:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  needs: [test]
+  script:
+    - echo "Building Email Service Docker image"
+    - cd ${SERVICE_PATH}
+    - |
+      docker build \
+        --build-arg NODE_VERSION=${NODE_VERSION} \
+        --tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+        --tag ${DOCKER_IMAGE_NAME}:latest \
+        .
+    - docker save ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} -o email-service-image.tar
+  artifacts:
+    paths:
+      - ${SERVICE_PATH}/email-service-image.tar
+    expire_in: 1 day
+
+# Security scan job - Scan Docker image for vulnerabilities
+security_scan:
+  stage: scan
+  image: aquasec/trivy:latest
+  needs: [build]
+  script:
+    - echo "Scanning Email Service Docker image for vulnerabilities"
+    - cd ${SERVICE_PATH}
+    - |
+      trivy image \
+        --input email-service-image.tar \
+        --format template \
+        --template '@/contrib/junit.tpl' \
+        --output trivy-results.xml \
+        --severity ${TRIVY_SEVERITY} \
+        --exit-code ${TRIVY_EXIT_CODE} \
+        --timeout ${TRIVY_TIMEOUT}
+  artifacts:
+    reports:
+      junit: ${SERVICE_PATH}/trivy-results.xml
+    paths:
+      - ${SERVICE_PATH}/trivy-results.xml
+    expire_in: 1 week
+  allow_failure: true
+
+# Publish job - Push Docker image to registry
+publish:
+  stage: publish
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  needs: [security_scan]
+  script:
+    - echo "Publishing Email Service Docker image to registry"
+    - cd ${SERVICE_PATH}
+    - docker load -i email-service-image.tar
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+    - docker push ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
+    - docker push ${DOCKER_IMAGE_NAME}:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "development"
+      when: on_success
+    - if: $CI_COMMIT_TAG =~ /^v.*/
+      when: on_success
+
+# Matrix build job - Test with multiple Node.js versions
+matrix_test:
+  stage: test
+  parallel:
+    matrix:
+      - NODE_VERSION: ["18.x", "20.x", "22.x"]
+  image: node:${NODE_VERSION}-alpine
+  script:
+    - echo "Running tests with Node.js ${NODE_VERSION}"
+    - cd ${SERVICE_PATH}
+    - npm ci
+    - npm run test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: on_success
+    - if: $CI_COMMIT_TAG =~ /^v.*/
+      when: on_success
+
+# Notification jobs
+
+# Notify on build success
+notify_build_success:
+  extends: notify
+  stage: .post
+  variables:
+    event_type: "build_success"
+    service_name: "${SERVICE_NAME}"
+    environment: "${CI_ENVIRONMENT_NAME}"
+    severity: "low"
+    notification_channels: "slack,webhook"
+    custom_message: "Email Service build completed successfully in ${CI_JOB_DURATION} seconds"
+  rules:
+    - if: $CI_PIPELINE_STATUS == "success"
+      when: on_success
+
+# Notify on build failure
+notify_build_failure:
+  extends: notify
+  stage: .post
+  variables:
+    event_type: "build_failure"
+    service_name: "${SERVICE_NAME}"
+    environment: "${CI_ENVIRONMENT_NAME}"
+    severity: "high"
+    notification_channels: "slack,email,webhook"
+    custom_message: "Email Service build failed! Check logs for details."
+    attach_logs: true
+  rules:
+    - if: $CI_PIPELINE_STATUS == "failed"
+      when: on_failure

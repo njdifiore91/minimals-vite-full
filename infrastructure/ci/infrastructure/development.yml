@@ -1,0 +1,350 @@
+# Development Environment Configuration for Terraform Workflows
+# This file defines the development-specific settings for infrastructure deployments
+# for the Merchant Cash Advance (MCA) Application Processing System
+
+name: "MCA Development Infrastructure Deployment"
+
+# Environment identification
+environment:
+  name: "development"
+  display_name: "Development"
+  description: "Development environment for MCA Application Processing System"
+  priority: "medium"
+  tags:
+    Environment: "Development"
+    Application: "MCA"
+    CostCenter: "FIN-123"
+    DataClassification: "Confidential"
+    BusinessUnit: "Funding"
+  performance_requirements:
+    application_processing_time_seconds: 600 # 10 minutes (relaxed for development)
+    automation_rate_percentage: 90 # Slightly lower than production/staging
+    data_extraction_accuracy_percentage: 95 # Slightly lower than production/staging
+    system_uptime_percentage: 99.0 # Lower SLA for development
+
+# Backend state configuration
+backend:
+  type: "s3"
+  config:
+    bucket: "mca-terraform-state-development"
+    key: "infrastructure/terraform.tfstate"
+    region: "us-east-1"
+    encrypt: true
+    dynamodb_table: "mca-terraform-locks-development"
+    role_arn: "arn:aws:iam::123456789012:role/TerraformDevelopmentRole"
+    # State locking to prevent concurrent modifications
+    lock_timeout: 600 # 10 minutes
+
+# Resource sizing for development workloads (smaller instances, fewer replicas)
+resource_sizing:
+  # PostgreSQL 14 database configuration
+  database:
+    engine: "postgres"
+    engine_version: "14"
+    instance_class: "db.t3.medium" # Smaller instance for development
+    storage_gb: 50 # Less storage for development
+    read_replicas: 0 # No read replicas for development
+    multi_az: false # Single AZ for cost savings
+    backup_retention_days: 7 # Shorter retention period
+    deletion_protection: false # Allow deletion for development
+    performance_insights_enabled: true
+    performance_insights_retention_period: 7
+  
+  # Redis 7.0 configuration
+  redis:
+    engine_version: "7.0"
+    node_type: "cache.t3.small" # Smaller instance for development
+    num_shards: 1 # Single shard for development
+    replicas_per_shard: 0 # No replicas for development
+    automatic_failover: false # No failover for development
+    multi_az: false # Single AZ for cost savings
+    transit_encryption_enabled: true
+    at_rest_encryption_enabled: true
+    ttl_settings:
+      application_data_minutes: 15
+      user_sessions_hours: 24
+  
+  # RabbitMQ configuration
+  rabbitmq:
+    instance_type: "mq.t3.micro" # Smaller instance for development
+    deployment_mode: "SINGLE_INSTANCE" # Single instance for development
+    engine_version: "3.10.20"
+    nodes: 1 # Single node for development
+    storage_type: "EBS"
+    message_exchanges:
+      - name: "mca.documents"
+        type: "fanout"
+    message_queues:
+      - name: "document-processing"
+        durable: true
+      - name: "data-extraction"
+        durable: true
+      - name: "notification"
+        durable: true
+  
+  # Kubernetes configuration
+  kubernetes:
+    version: "1.26"
+    node_groups:
+      standard:
+        instance_type: "t3.medium" # Smaller instance for development
+        min_size: 1
+        max_size: 3
+        desired_size: 1
+      gpu:
+        # GPU-enabled nodes for OCR service (smaller for development)
+        instance_type: "g4dn.small"
+        min_size: 1
+        max_size: 1
+        desired_size: 1
+    namespaces:
+      - name: "development"
+        resource_quota:
+          cpu: "10"
+          memory: "20Gi"
+          pods: "30"
+        limit_ranges:
+          default_request:
+            cpu: "50m"
+            memory: "128Mi"
+          default_limit:
+            cpu: "500m"
+            memory: "512Mi"
+      # Support for feature branch environments
+      - name: "feature-branches"
+        resource_quota:
+          cpu: "10"
+          memory: "20Gi"
+          pods: "30"
+        limit_ranges:
+          default_request:
+            cpu: "50m"
+            memory: "128Mi"
+          default_limit:
+            cpu: "500m"
+            memory: "512Mi"
+
+# Approval process configuration - relaxed for faster iteration
+approval:
+  required: false # No approval required for development
+  approvers_required: 0
+  approver_groups:
+    - "developers"
+  timeout_minutes: 60 # 1 hour
+  auto_expire: true
+  approval_policy:
+    enforce_separation_of_duties: false
+    require_security_review: false
+    require_compliance_check: false
+
+# Security settings - development-specific
+security:
+  encryption:
+    kms_key_id: "arn:aws:kms:us-east-1:123456789012:key/dev-abcd1234-ef56-gh78-ij90-klmnopqrstuv"
+    encrypt_all_volumes: true
+    encrypt_all_s3_buckets: true
+    encryption_algorithm: "AES-256"
+    field_level_encryption_enabled: true
+  network:
+    vpc_flow_logs_enabled: true
+    waf_enabled: false # Disabled for development
+    ddos_protection: false # Disabled for development
+    cors_configuration:
+      allowed_origins:
+        - "https://dev.dollarfunding.com"
+        - "https://app.dev.dollarfunding.com"
+        - "http://localhost:3000" # Allow local development
+      allowed_methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Authorization"
+        - "Content-Type"
+      expose_headers:
+        - "Content-Length"
+        - "X-Request-Id"
+      max_age_seconds: 3600
+  compliance:
+    enable_cloudtrail: true
+    enable_config: false # Disabled for development
+    enable_guardduty: false # Disabled for development
+    enable_security_hub: false # Disabled for development
+    data_retention_years: 1 # Shorter retention for development
+  access_control:
+    enforce_mfa: false # Relaxed for development
+    enforce_iam_permissions_boundary: false # Relaxed for development
+    restrict_public_access: true
+    jwt_authentication:
+      algorithm: "RS256"
+      token_expiry_minutes: 60
+      refresh_token_expiry_days: 7
+    rate_limiting:
+      enabled: false # Disabled for development
+      requests_per_minute: 1000 # Higher limit for development
+      burst: 2000
+
+# Validation steps - simplified for development
+validation:
+  pre_apply:
+    - name: "terraform-validate"
+      timeout_minutes: 5
+      required: true
+    - name: "tfsec-security-scan"
+      timeout_minutes: 10
+      required: false # Optional for development
+      fail_on_severity: "CRITICAL" # Only fail on critical issues
+    - name: "cost-estimation"
+      timeout_minutes: 5
+      threshold_percentage: 30 # Higher threshold for development
+      required: false # Optional for development
+  
+  post_apply:
+    - name: "infrastructure-tests"
+      timeout_minutes: 15
+      required: false # Optional for development
+    - name: "connectivity-tests"
+      timeout_minutes: 10
+      required: true
+      services_to_check:
+        - "postgresql"
+        - "rabbitmq"
+        - "redis"
+        - "s3"
+    - name: "smoke-tests"
+      timeout_minutes: 15
+      required: true
+      test_paths:
+        - "infrastructure/tests/smoke/development/"
+
+# Notification channels - development-specific
+notifications:
+  channels:
+    - type: "email"
+      recipients:
+        - "dev-team@dollarfunding.com"
+    - type: "slack"
+      channel: "#dev-infrastructure-alerts"
+  
+  events:
+    - name: "plan_created"
+      channels: ["slack"]
+      priority: "info"
+    - name: "apply_started"
+      channels: ["slack"]
+      priority: "info"
+    - name: "apply_completed"
+      channels: ["slack"]
+      priority: "normal"
+    - name: "apply_failed"
+      channels: ["email", "slack"]
+      priority: "high"
+    - name: "validation_failed"
+      channels: ["slack"]
+      priority: "normal"
+
+# Automatic cleanup of ephemeral resources
+resource_cleanup:
+  enabled: true
+  feature_branch_ttl_hours: 72 # 3 days
+  unused_resource_ttl_days: 7 # 7 days
+  cleanup_schedule: "0 0 * * *" # Daily at midnight
+  resources_to_cleanup:
+    - "feature-branch-namespaces"
+    - "feature-branch-databases"
+    - "feature-branch-storage"
+    - "unused-ebs-volumes"
+    - "unattached-elastic-ips"
+  notification_before_cleanup_hours: 24
+
+# Feature branch environment support
+feature_branches:
+  enabled: true
+  naming_pattern: "feature-{branch-name}"
+  max_concurrent_environments: 10
+  auto_create_on_branch_push: true
+  auto_destroy_on_branch_delete: true
+  resources_per_environment:
+    - type: "namespace"
+      template: "feature-branch-namespace.yml"
+    - type: "database-schema"
+      template: "feature-branch-database.yml"
+    - type: "storage-bucket"
+      template: "feature-branch-storage.yml"
+  domain_pattern: "{branch-name}.dev.dollarfunding.com"
+
+# Disaster recovery configuration - simplified for development
+disaster_recovery:
+  state_backup:
+    enabled: true
+    frequency: "daily"
+    retention_days: 7 # Shorter retention for development
+  cross_region_replication:
+    enabled: false
+  recovery_time_objective_minutes: 120 # Longer RTO for development
+  recovery_point_objective_minutes: 60 # Longer RPO for development
+  database_recovery:
+    point_in_time_recovery_enabled: false # Disabled for development
+    automated_snapshots_enabled: true
+    snapshot_frequency_hours: 24 # Daily snapshots for development
+  s3_buckets:
+    - name: "mca-documents-development"
+      versioning_enabled: true
+      replication_enabled: false
+      lifecycle_rules:
+        transition_to_ia_days: 30
+        transition_to_glacier_days: 90
+        expiration_days: 180 # Shorter retention for development
+
+# Monitoring and observability with Datadog - simplified for development
+monitoring:
+  provider: "datadog"
+  metrics_namespace: "MCA/Development/Infrastructure"
+  dashboard_name: "MCA-Development-Infrastructure"
+  metrics_collection_interval: 30 # Longer interval for development
+  log_retention_days: 7 # Shorter retention for development
+  apm_enabled: true
+  custom_metrics:
+    - name: "application_processing_time"
+      unit: "Seconds"
+      description: "Time to process an application end-to-end"
+    - name: "ocr_accuracy"
+      unit: "Percent"
+      description: "Accuracy of OCR data extraction"
+    - name: "queue_depth"
+      unit: "Count"
+      description: "Number of messages in processing queues"
+    - name: "api_response_time"
+      unit: "Milliseconds"
+      description: "API response time for requests"
+  alarms:
+    - name: "HighCpuUtilization"
+      threshold: 90 # Higher threshold for development
+      evaluation_periods: 5 # More periods before alerting
+      period_seconds: 60
+      statistic: "Average"
+      comparison_operator: "GreaterThanThreshold"
+      treat_missing_data: "missing"
+      alarm_actions: ["slack"]
+
+# Deployment windows - more flexible for development
+deployment_windows:
+  allowed_days:
+    - "Monday"
+    - "Tuesday"
+    - "Wednesday"
+    - "Thursday"
+    - "Friday"
+    - "Saturday"
+    - "Sunday"
+  allowed_hours:
+    start: "00:00" # 24/7 deployment window
+    end: "23:59"
+  timezone: "America/New_York"
+  blackout_dates: [] # No blackout dates for development
+  emergency_override_requires_approval: false
+  emergency_approvers_required: 0
+  change_freeze_periods: [] # No freeze periods for development
+  notification_before_window_closes_minutes: 0 # No notifications needed

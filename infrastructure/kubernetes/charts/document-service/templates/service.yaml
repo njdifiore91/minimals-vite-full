@@ -1,0 +1,34 @@
+{{- /*
+service.yaml: Kubernetes Service template for Document Service
+
+This template extends the common service template with Document Service specific configurations.
+It defines the service ports, selector labels, and annotations for the Document Service.
+
+Key features:
+- Exposes HTTP API endpoint for document classification (port 5000)
+- Exposes metrics endpoint for Prometheus monitoring (port 9090)
+- Uses ClusterIP service type for internal cluster access
+- Includes appropriate annotations for service discovery
+- Sets selector labels to target Document Service pods
+*/}}
+
+{{- $serviceValues := dict "enabled" true "type" "ClusterIP" -}}
+
+{{- $ports := list -}}
+{{- $httpPort := dict "name" "http" "port" 5000 "targetPort" 5000 "protocol" "TCP" -}}
+{{- $metricsPort := dict "name" "metrics" "port" 9090 "targetPort" 9090 "protocol" "TCP" -}}
+{{- $ports = append $ports $httpPort -}}
+{{- $ports = append $ports $metricsPort -}}
+
+{{- $_ := set $serviceValues "ports" $ports -}}
+
+{{- $annotations := dict -}}
+{{- $_ := set $annotations "prometheus.io/scrape" "true" -}}
+{{- $_ := set $annotations "prometheus.io/port" "9090" -}}
+{{- $_ := set $annotations "prometheus.io/path" "/metrics" -}}
+
+{{- $_ := set $serviceValues "annotations" $annotations -}}
+
+{{- $_ := set .Values "service" (merge .Values.service $serviceValues) -}}
+
+{{- include "common.templates.service" . -}}

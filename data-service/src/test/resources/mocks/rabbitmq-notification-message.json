@@ -1,0 +1,153 @@
+{
+  "properties": {
+    "contentType": "application/json",
+    "contentEncoding": "utf-8",
+    "deliveryMode": 2,
+    "priority": 1,
+    "correlationId": "corr-123e4567-e89b-12d3-a456-426614174000",
+    "replyTo": "amq.gen-reply-queue",
+    "messageId": "msg-123e4567-e89b-12d3-a456-426614174000",
+    "timestamp": 1621234567890,
+    "type": "notification.status.update",
+    "userId": "mca-data-service",
+    "appId": "mca-data-service",
+    "clusterId": "mca-cluster-1",
+    "headers": {
+      "x-retry-count": 0,
+      "x-source-service": "data-service",
+      "x-destination-service": "notification-service",
+      "x-event-type": "APPLICATION_APPROVED"
+    }
+  },
+  "exchange": "mca.notifications",
+  "routingKey": "notification.status.update",
+  "payload": {
+    "id": "notif-123e4567-e89b-12d3-a456-426614174000",
+    "channel": "webhook",
+    "status": "queued",
+    "recipient": "https://partner-api.example.com/webhooks/mca-updates",
+    "sender": "mca-data-service",
+    "templateId": "application-status-change",
+    "payload": {
+      "body": "Application status has been updated to APPROVED",
+      "subject": "MCA Application Status Update",
+      "htmlBody": "<h1>Application Status Update</h1><p>The application has been <strong>approved</strong>.</p>",
+      "url": "https://partner-api.example.com/webhooks/mca-updates",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Webhook-Signature": "{{signature}}"
+      },
+      "payload": {
+        "eventType": "APPLICATION_APPROVED",
+        "applicationId": "app-123e4567-e89b-12d3-a456-426614174000",
+        "merchantId": "merch-123e4567-e89b-12d3-a456-426614174000",
+        "timestamp": "2023-05-15T14:30:45.123Z",
+        "data": {
+          "applicationStatus": "APPROVED",
+          "reviewStatus": "APPROVED",
+          "approvedAmount": 25000.00,
+          "approvedTermMonths": 12,
+          "approvedDate": "2023-05-15T14:30:45.123Z",
+          "approvedBy": "john.reviewer@dollarfunding.com",
+          "notes": "Application meets all criteria for approval"
+        }
+      }
+    },
+    "metadata": {
+      "applicationId": "app-123e4567-e89b-12d3-a456-426614174000",
+      "merchantId": "merch-123e4567-e89b-12d3-a456-426614174000",
+      "eventType": "APPLICATION_APPROVED",
+      "correlationId": "corr-123e4567-e89b-12d3-a456-426614174000",
+      "tags": ["approval", "status-change", "webhook-notification"]
+    },
+    "deliveryOptions": {
+      "priority": "high",
+      "maxRetries": 5,
+      "retryInterval": 60000,
+      "retryStrategy": "exponential",
+      "requireConfirmation": true,
+      "idempotencyKey": "idempotency-123e4567-e89b-12d3-a456-426614174000",
+      "signatureRequired": true
+    },
+    "createdAt": "2023-05-15T14:30:45.123Z",
+    "updatedAt": "2023-05-15T14:30:45.123Z"
+  },
+  "alternateNotificationExamples": [
+    {
+      "eventType": "APPLICATION_CREATED",
+      "applicationId": "app-223e4567-e89b-12d3-a456-426614174000",
+      "data": {
+        "applicationStatus": "NEW",
+        "createdDate": "2023-05-14T10:15:30.456Z",
+        "merchantName": "Acme Corporation",
+        "requestedAmount": 30000.00
+      }
+    },
+    {
+      "eventType": "DOCUMENT_UPLOADED",
+      "applicationId": "app-323e4567-e89b-12d3-a456-426614174000",
+      "documentId": "doc-123e4567-e89b-12d3-a456-426614174000",
+      "data": {
+        "documentType": "BANK_STATEMENT",
+        "fileName": "bank_statement_april_2023.pdf",
+        "uploadedBy": "merchant-portal",
+        "uploadedDate": "2023-05-14T11:22:33.789Z",
+        "fileSize": 1245678,
+        "mimeType": "application/pdf"
+      }
+    },
+    {
+      "eventType": "DOCUMENT_PROCESSED",
+      "applicationId": "app-423e4567-e89b-12d3-a456-426614174000",
+      "documentId": "doc-223e4567-e89b-12d3-a456-426614174000",
+      "data": {
+        "documentType": "TAX_RETURN",
+        "processingStatus": "COMPLETED",
+        "processingDate": "2023-05-14T12:34:56.789Z",
+        "extractedData": {
+          "year": "2022",
+          "grossIncome": 450000.00,
+          "netIncome": 125000.00,
+          "confidenceScore": 0.95
+        }
+      }
+    },
+    {
+      "eventType": "APPLICATION_REJECTED",
+      "applicationId": "app-523e4567-e89b-12d3-a456-426614174000",
+      "data": {
+        "applicationStatus": "REJECTED",
+        "reviewStatus": "REJECTED",
+        "rejectionReason": "INSUFFICIENT_INCOME",
+        "rejectionDate": "2023-05-14T15:45:12.345Z",
+        "rejectedBy": "jane.reviewer@dollarfunding.com",
+        "notes": "Business income below minimum threshold for requested amount"
+      }
+    }
+  ],
+  "emailNotificationExample": {
+    "channel": "email",
+    "recipient": "merchant@example.com",
+    "payload": {
+      "subject": "Your MCA Application Status Update",
+      "body": "Your application has been approved for $25,000.",
+      "htmlBody": "<h1>Congratulations!</h1><p>Your application has been <strong>approved</strong> for <strong>$25,000</strong>.</p>"
+    },
+    "deliveryOptions": {
+      "priority": "medium",
+      "maxRetries": 3
+    }
+  },
+  "smsNotificationExample": {
+    "channel": "sms",
+    "recipient": "+15551234567",
+    "payload": {
+      "body": "Dollar Funding: Your MCA application #A12345 has been approved for $25,000. Log in to view details."
+    },
+    "deliveryOptions": {
+      "priority": "medium",
+      "maxRetries": 2
+    }
+  }
+}

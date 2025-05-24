@@ -1,0 +1,896 @@
+{
+  "version": "1.0",
+  "description": "Sample manifest for OCR test data with typed documents",
+  "created_at": "2023-05-23",
+  "updated_at": "2023-05-23",
+  "document_count": 25,
+  "categories": [
+    "application_forms",
+    "tax_returns",
+    "bank_statements",
+    "invoices",
+    "financial_documents",
+    "identity_documents"
+  ],
+  "quality_variations": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "documents": [
+    {
+      "id": "app_form_001",
+      "file_name": "application_form_001.pdf",
+      "category": "application_forms",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
+      "language": "en",
+      "description": "Standard merchant cash advance application form with typed fields",
+      "metadata": {
+        "form_version": "v2.3",
+        "form_type": "standard"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 120,
+              "left": 150,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "dba_name",
+            "value": "Acme Business Solutions",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 1,
+              "top": 160,
+              "left": 150,
+              "width": 200,
+              "height": 30
+            },
+            "required": false
+          },
+          {
+            "name": "tax_id",
+            "value": "12-3456789",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 200,
+              "left": 150,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "business_address",
+            "value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "expected_confidence": 0.94,
+            "location": {
+              "page": 1,
+              "top": 240,
+              "left": 150,
+              "width": 350,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "business_phone",
+            "value": "(555) 123-4567",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 280,
+              "left": 150,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "business_email",
+            "value": "info@acmecorp.com",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 320,
+              "left": 150,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "business_type",
+            "value": "Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 360,
+              "left": 150,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "years_in_business",
+            "value": "5",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 400,
+              "left": 150,
+              "width": 50,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "monthly_revenue",
+            "value": "$75,000",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 440,
+              "left": 150,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "requested_amount",
+            "value": "$50,000",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 480,
+              "left": 150,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "owner_name",
+            "value": "John Smith",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 2,
+              "top": 120,
+              "left": 150,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "owner_title",
+            "value": "CEO",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 2,
+              "top": 160,
+              "left": 150,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "owner_phone",
+            "value": "(555) 987-6543",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 2,
+              "top": 200,
+              "left": 150,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "owner_email",
+            "value": "john.smith@acmecorp.com",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 2,
+              "top": 240,
+              "left": 150,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "owner_ssn",
+            "value": "XXX-XX-1234",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 2,
+              "top": 280,
+              "left": 150,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_references",
+            "location": {
+              "page": 2,
+              "top": 350,
+              "left": 50,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 2,
+            "columns": 3,
+            "headers": ["Bank Name", "Account Number", "Contact Person"],
+            "data": [
+              ["First National Bank", "XXXXXXX1234", "Jane Doe"],
+              ["Second City Bank", "XXXXXXX5678", "Robert Johnson"]
+            ],
+            "expected_confidence": 0.92
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_return_001",
+      "file_name": "tax_return_001.pdf",
+      "category": "tax_returns",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "language": "en",
+      "description": "Business tax return form 1120 with typed fields",
+      "metadata": {
+        "tax_year": "2022",
+        "form_type": "1120"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_id",
+            "value": "12-3456789",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 190,
+              "left": 200,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_year_beginning",
+            "value": "01/01/2022",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 230,
+              "left": 200,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_year_ending",
+            "value": "12/31/2022",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 230,
+              "left": 350,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_income",
+            "value": "$1,250,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 400,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_deductions",
+            "value": "$950,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "taxable_income",
+            "value": "$300,000",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 550,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_tax",
+            "value": "$63,000",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "income_statement",
+            "location": {
+              "page": 2,
+              "top": 150,
+              "left": 50,
+              "width": 500,
+              "height": 400
+            },
+            "rows": 10,
+            "columns": 2,
+            "headers": ["Item", "Amount"],
+            "data": [
+              ["Gross receipts or sales", "$1,200,000"],
+              ["Returns and allowances", "$25,000"],
+              ["Cost of goods sold", "$500,000"],
+              ["Gross profit", "$675,000"],
+              ["Dividends", "$50,000"],
+              ["Interest", "$25,000"],
+              ["Gross rents", "$0"],
+              ["Gross royalties", "$0"],
+              ["Capital gain net income", "$0"],
+              ["Net gain or (loss)", "$0"]
+            ],
+            "expected_confidence": 0.93
+          }
+        ]
+      }
+    },
+    {
+      "id": "bank_statement_001",
+      "file_name": "bank_statement_001.pdf",
+      "category": "bank_statements",
+      "quality": "medium",
+      "orientation": "landscape",
+      "page_count": 2,
+      "language": "en",
+      "description": "Business checking account statement with transaction details",
+      "metadata": {
+        "bank_name": "First National Bank",
+        "account_type": "Business Checking",
+        "statement_period": "January 2023"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 120,
+              "left": 100,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "account_number",
+            "value": "XXXXXXX1234",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 100,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "statement_period",
+            "value": "01/01/2023 - 01/31/2023",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 100,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "beginning_balance",
+            "value": "$125,432.67",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 210,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "ending_balance",
+            "value": "$142,567.89",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 240,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_deposits",
+            "value": "$75,500.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 270,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_withdrawals",
+            "value": "$58,364.78",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "transaction_history",
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 50,
+              "width": 700,
+              "height": 400
+            },
+            "rows": 15,
+            "columns": 4,
+            "headers": ["Date", "Description", "Withdrawals", "Deposits"],
+            "data": [
+              ["01/03/2023", "Customer Payment - XYZ Inc", "", "$12,500.00"],
+              ["01/05/2023", "Vendor Payment - ABC Supplies", "$3,245.67", ""],
+              ["01/07/2023", "Customer Payment - 123 Corp", "", "$8,750.00"],
+              ["01/10/2023", "Payroll", "$22,456.78", ""],
+              ["01/12/2023", "Customer Payment - Smith LLC", "", "$15,000.00"],
+              ["01/15/2023", "Rent Payment", "$4,500.00", ""],
+              ["01/17/2023", "Customer Payment - Johnson Co", "", "$9,250.00"],
+              ["01/20/2023", "Utility Payment - Electric", "$1,234.56", ""],
+              ["01/22/2023", "Customer Payment - Brown Inc", "", "$11,000.00"],
+              ["01/25/2023", "Vendor Payment - Office Supplies", "$876.45", ""],
+              ["01/27/2023", "Customer Payment - Green Corp", "", "$19,000.00"],
+              ["01/28/2023", "Insurance Payment", "$2,345.67", ""],
+              ["01/29/2023", "Utility Payment - Internet", "$189.95", ""],
+              ["01/30/2023", "Vendor Payment - Marketing", "$23,515.70", ""],
+              ["01/31/2023", "Interest Earned", "", "$0.00"]
+            ],
+            "expected_confidence": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "id": "invoice_001",
+      "file_name": "invoice_001.pdf",
+      "category": "invoices",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en",
+      "description": "Vendor invoice with line items and payment details",
+      "metadata": {
+        "vendor_name": "ABC Supplies Inc",
+        "invoice_type": "Product"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "value": "INV-12345",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 120,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "invoice_date",
+            "value": "01/15/2023",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "due_date",
+            "value": "02/15/2023",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "vendor_name",
+            "value": "ABC Supplies Inc",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 120,
+              "left": 100,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "vendor_address",
+            "value": "456 Supply Street, Vendor City, CA 90210",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 100,
+              "width": 300,
+              "height": 60
+            },
+            "required": true
+          },
+          {
+            "name": "vendor_phone",
+            "value": "(555) 987-6543",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 210,
+              "left": 100,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "customer_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 270,
+              "left": 100,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "customer_address",
+            "value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "expected_confidence": 0.94,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 100,
+              "width": 300,
+              "height": 60
+            },
+            "required": true
+          },
+          {
+            "name": "subtotal",
+            "value": "$2,950.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax",
+            "value": "$295.67",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 630,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total",
+            "value": "$3,245.67",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 660,
+              "left": 500,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "payment_terms",
+            "value": "Net 30",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 690,
+              "left": 100,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "location": {
+              "page": 1,
+              "top": 400,
+              "left": 50,
+              "width": 600,
+              "height": 180
+            },
+            "rows": 5,
+            "columns": 5,
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["A-101", "Office Desk", "2", "$350.00", "$700.00"],
+              ["A-102", "Office Chair", "5", "$150.00", "$750.00"],
+              ["A-103", "Filing Cabinet", "3", "$200.00", "$600.00"],
+              ["A-104", "Bookshelf", "2", "$250.00", "$500.00"],
+              ["A-105", "Desk Lamp", "4", "$100.00", "$400.00"]
+            ],
+            "expected_confidence": 0.94
+          }
+        ]
+      }
+    },
+    {
+      "id": "low_quality_doc_001",
+      "file_name": "low_quality_doc_001.pdf",
+      "category": "financial_documents",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en",
+      "description": "Faxed profit and loss statement with low quality scan",
+      "metadata": {
+        "document_type": "Profit and Loss",
+        "period": "Q1 2023"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.85,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Profit and Loss Statement",
+            "expected_confidence": 0.88,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "period",
+            "value": "January 1 - March 31, 2023",
+            "expected_confidence": 0.82,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_revenue",
+            "value": "$325,000.00",
+            "expected_confidence": 0.80,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_expenses",
+            "value": "$275,000.00",
+            "expected_confidence": 0.78,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_income",
+            "value": "$50,000.00",
+            "expected_confidence": 0.83,
+            "location": {
+              "page": 1,
+              "top": 550,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "revenue_breakdown",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Revenue Category", "Amount"],
+            "data": [
+              ["Product Sales", "$250,000.00"],
+              ["Service Revenue", "$50,000.00"],
+              ["Consulting Fees", "$25,000.00"],
+              ["Total Revenue", "$325,000.00"]
+            ],
+            "expected_confidence": 0.75
+          },
+          {
+            "name": "expense_breakdown",
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 100,
+              "width": 500,
+              "height": 200
+            },
+            "rows": 6,
+            "columns": 2,
+            "headers": ["Expense Category", "Amount"],
+            "data": [
+              ["Cost of Goods Sold", "$125,000.00"],
+              ["Salaries and Wages", "$100,000.00"],
+              ["Rent and Utilities", "$25,000.00"],
+              ["Marketing and Advertising", "$15,000.00"],
+              ["Other Expenses", "$10,000.00"],
+              ["Total Expenses", "$275,000.00"]
+            ],
+            "expected_confidence": 0.72
+          }
+        ]
+      }
+    }
+  ],
+  "test_parameters": {
+    "confidence_threshold": 0.75,
+    "minimum_accuracy": 0.99,
+    "performance_metrics": [
+      "character_accuracy",
+      "word_accuracy",
+      "field_accuracy",
+      "table_structure_accuracy",
+      "processing_time"
+    ]
+  }
+}

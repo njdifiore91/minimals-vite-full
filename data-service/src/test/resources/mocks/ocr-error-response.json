@@ -1,0 +1,179 @@
+{
+  "error_responses": [
+    {
+      "error_type": "validation_error",
+      "error_code": "OCR-VAL-001",
+      "error_message": "Invalid document format. Expected PDF, received image/tiff",
+      "correlation_id": "corr-8a7b6c5d-4e3f-2a1b-9c8d-7e6f5a4b3c2d",
+      "timestamp": "2025-03-15T14:32:45.123Z",
+      "document_id": "doc-12345",
+      "request_details": {
+        "document_type": "loan_application",
+        "requested_fields": ["applicant_name", "loan_amount", "property_address"],
+        "source_path": "s3://mca-documents-staging/applications/app-67890/loan_application.tiff"
+      },
+      "validation_errors": [
+        {
+          "field": "document_format",
+          "expected": "application/pdf",
+          "received": "image/tiff",
+          "message": "Document format not supported for this document type"
+        }
+      ]
+    },
+    {
+      "error_type": "processing_error",
+      "error_code": "OCR-PROC-002",
+      "error_message": "Failed to extract text from document due to poor image quality",
+      "correlation_id": "corr-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "timestamp": "2025-03-15T15:45:12.789Z",
+      "document_id": "doc-67890",
+      "request_details": {
+        "document_type": "bank_statement",
+        "requested_fields": ["account_number", "account_holder", "balance", "transactions"],
+        "source_path": "s3://mca-documents-staging/applications/app-67890/bank_statement.pdf"
+      },
+      "processing_details": {
+        "processing_stage": "text_extraction",
+        "failure_reason": "image_quality",
+        "quality_score": 0.32,
+        "quality_threshold": 0.6,
+        "affected_pages": [2, 3, 5]
+      },
+      "partial_results": {
+        "account_holder": {
+          "value": "John Smith",
+          "confidence": 0.95
+        },
+        "account_number": {
+          "value": "****6789",
+          "confidence": 0.87
+        },
+        "balance": null,
+        "transactions": null
+      }
+    },
+    {
+      "error_type": "service_error",
+      "error_code": "OCR-SVC-003",
+      "error_message": "OCR service temporarily unavailable due to high load",
+      "correlation_id": "corr-9z8y7x6w-5v4u-3t2s-1r0q-9p8o7n6m5l4k",
+      "timestamp": "2025-03-15T16:20:33.456Z",
+      "document_id": "doc-54321",
+      "request_details": {
+        "document_type": "tax_return",
+        "requested_fields": ["taxpayer_id", "tax_year", "adjusted_gross_income", "total_tax"],
+        "source_path": "s3://mca-documents-staging/applications/app-67890/tax_return_2024.pdf"
+      },
+      "service_details": {
+        "service_name": "ocr-service",
+        "instance_id": "ocr-service-pod-7abc9",
+        "resource_constraints": {
+          "cpu_utilization": 98.5,
+          "memory_utilization": 92.3,
+          "gpu_utilization": 99.8
+        },
+        "retry_after": 300
+      }
+    },
+    {
+      "error_type": "timeout_error",
+      "error_code": "OCR-TIME-004",
+      "error_message": "OCR processing timed out after 120 seconds",
+      "correlation_id": "corr-2d3e4f5g-6h7i-8j9k-0l1m-2n3o4p5q6r7s",
+      "timestamp": "2025-03-15T17:10:22.789Z",
+      "document_id": "doc-98765",
+      "request_details": {
+        "document_type": "identity_document",
+        "requested_fields": ["full_name", "document_number", "date_of_birth", "expiration_date", "document_type"],
+        "source_path": "s3://mca-documents-staging/applications/app-67890/drivers_license.pdf"
+      },
+      "timeout_details": {
+        "timeout_limit_seconds": 120,
+        "processing_stage": "handwriting_recognition",
+        "document_complexity_score": 0.89,
+        "estimated_time_required": 180
+      }
+    },
+    {
+      "error_type": "data_extraction_error",
+      "error_code": "OCR-EXT-005",
+      "error_message": "Failed to extract required fields from document",
+      "correlation_id": "corr-3e4f5g6h-7i8j-9k0l-1m2n-3o4p5q6r7s8t",
+      "timestamp": "2025-03-15T18:05:17.123Z",
+      "document_id": "doc-24680",
+      "request_details": {
+        "document_type": "pay_stub",
+        "requested_fields": ["employee_name", "employer_name", "pay_period", "gross_pay", "net_pay", "ytd_earnings"],
+        "source_path": "s3://mca-documents-staging/applications/app-67890/pay_stub_march.pdf"
+      },
+      "extraction_details": {
+        "successful_fields": ["employee_name", "employer_name", "pay_period"],
+        "failed_fields": ["gross_pay", "net_pay", "ytd_earnings"],
+        "failure_reasons": {
+          "gross_pay": "field_not_found",
+          "net_pay": "low_confidence",
+          "ytd_earnings": "field_not_found"
+        }
+      },
+      "partial_results": {
+        "employee_name": {
+          "value": "Jane Doe",
+          "confidence": 0.98
+        },
+        "employer_name": {
+          "value": "ACME Corporation",
+          "confidence": 0.96
+        },
+        "pay_period": {
+          "value": "03/01/2025 - 03/15/2025",
+          "confidence": 0.92
+        },
+        "gross_pay": null,
+        "net_pay": {
+          "value": "$1,234.56",
+          "confidence": 0.42
+        },
+        "ytd_earnings": null
+      }
+    },
+    {
+      "error_type": "authorization_error",
+      "error_code": "OCR-AUTH-006",
+      "error_message": "Unauthorized access to document in S3 storage",
+      "correlation_id": "corr-4f5g6h7i-8j9k-0l1m-2n3o-4p5q6r7s8t9u",
+      "timestamp": "2025-03-15T19:30:45.789Z",
+      "document_id": "doc-13579",
+      "request_details": {
+        "document_type": "business_license",
+        "requested_fields": ["business_name", "license_number", "issue_date", "expiration_date"],
+        "source_path": "s3://mca-documents-production/applications/app-13579/business_license.pdf"
+      },
+      "authorization_details": {
+        "resource": "s3://mca-documents-production/applications/app-13579/business_license.pdf",
+        "required_permission": "s3:GetObject",
+        "service_principal": "ocr-service-staging",
+        "error_message": "Access Denied: service principal does not have permission to access production bucket"
+      }
+    },
+    {
+      "error_type": "document_error",
+      "error_code": "OCR-DOC-007",
+      "error_message": "Document is password protected or encrypted",
+      "correlation_id": "corr-5g6h7i8j-9k0l-1m2n-3o4p-5q6r7s8t9u0v",
+      "timestamp": "2025-03-15T20:15:33.456Z",
+      "document_id": "doc-97531",
+      "request_details": {
+        "document_type": "financial_statement",
+        "requested_fields": ["company_name", "reporting_period", "total_assets", "total_liabilities", "net_income"],
+        "source_path": "s3://mca-documents-staging/applications/app-97531/financial_statement_q1.pdf"
+      },
+      "document_details": {
+        "protection_type": "password_protected",
+        "document_format": "application/pdf",
+        "document_size_bytes": 1245678,
+        "error_message": "Cannot process password protected PDF document"
+      }
+    }
+  ]
+}

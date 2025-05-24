@@ -1,0 +1,22 @@
+apiVersion: v2
+name: rabbitmq
+version: 1.0.0
+appVersion: "3.12.x"
+description: RabbitMQ Helm chart for MCA processing pipeline message queue with high availability and guaranteed message delivery
+type: application
+keywords:
+  - rabbitmq
+  - message-queue
+  - amqp
+  - mca-processing
+  - asynchronous-messaging
+home: https://www.rabbitmq.com/
+maintainers:
+  - name: Dollar Funding Operations Team
+    email: ops@dollarfunding.com
+annotations:
+  category: Infrastructure
+  deploymentType: StatefulSet
+  minClusterSize: "3"
+  sla: "99.9%"
+  documentation: https://www.rabbitmq.com/documentation.html

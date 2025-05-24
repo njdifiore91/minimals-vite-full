@@ -1,0 +1,380 @@
+# Data Service Deployment Configuration for MCA Application Processing System
+# This file extends the base Java service template with Data Service-specific configurations
+# for deploying to Kubernetes environments (development, staging, production).
+#
+# Features:
+# - Environment-specific configurations for database, cache, and messaging
+# - PostgreSQL 14 connection setup with read replicas
+# - RabbitMQ integration for inter-service communication
+# - Redis 7.0 cache configuration with appropriate TTL settings
+# - Flyway database migration execution during deployment
+# - Health check endpoints specific to the Data Service
+# - Automatic rollback procedures in case of deployment failure
+# - Secrets management for sensitive data (credentials, API keys, encryption keys)
+#
+# This configuration is part of the Merchant Cash Advance (MCA) Application Processing System
+# and is designed to automate the deployment of the Data Service microservice.
+
+# Extend the base Java service template
+extends: ../templates/java-service.yml
+
+# Environment-specific variables
+variables:
+  # Application information
+  APP_NAME: data-service
+  APP_DESCRIPTION: "MCA Application Processing System - Data Service"
+  APP_VERSION: "1.0.0"
+  
+  # Java and Spring Boot configuration
+  JAVA_VERSION: "17"
+  SPRING_BOOT_VERSION: "3.2.3"
+  
+  # Docker image configuration
+  DOCKER_REGISTRY: "${CI_REGISTRY}"
+  DOCKER_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/data-service"
+  
+  # Kubernetes namespace
+  K8S_NAMESPACE: "mca-${CI_ENVIRONMENT_NAME}"
+  
+  # Helm chart location
+  HELM_CHART_PATH: "infrastructure/kubernetes/charts/data-service"
+  
+  # Database configuration
+  DB_NAME: "mca_data"
+  DB_SCHEMA: "public"
+  
+  # Default resource settings (overridden by environment)
+  DEFAULT_REPLICAS: "1"
+  DEFAULT_CPU_REQUEST: "250m"
+  DEFAULT_CPU_LIMIT: "500m"
+  DEFAULT_MEMORY_REQUEST: "512Mi"
+  DEFAULT_MEMORY_LIMIT: "1Gi"
+  
+  # Default JVM settings (overridden by environment)
+  DEFAULT_JAVA_OPTS: "-Xms256m -Xmx512m -XX:+UseG1GC"
+
+# Deployment stages
+stages:
+  - build
+  - test
+  - package
+  - scan
+  - deploy
+  - verify
+
+# Environment-specific configurations
+.development_env: &development_env
+  variables:
+    # Environment name
+    ENVIRONMENT: development
+    
+    # Kubernetes configuration
+    REPLICAS: "1"
+    CPU_REQUEST: "100m"
+    CPU_LIMIT: "250m"
+    MEMORY_REQUEST: "256Mi"
+    MEMORY_LIMIT: "512Mi"
+    
+    # JVM configuration
+    JAVA_OPTS: "-Xms128m -Xmx384m -XX:+UseG1GC"
+    
+    # Spring profiles
+    SPRING_PROFILES: "development"
+    
+    # Database configuration
+    DB_HOST: "postgres-primary.mca-development.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_READ_REPLICAS: "0"
+    
+    # Redis configuration
+    REDIS_HOST: "redis.mca-development.svc.cluster.local"
+    REDIS_PORT: "6379"
+    REDIS_DATA_TTL: "900" # 15 minutes in seconds
+    REDIS_SESSION_TTL: "86400" # 24 hours in seconds
+    
+    # RabbitMQ configuration
+    RABBITMQ_HOST: "rabbitmq.mca-development.svc.cluster.local"
+    RABBITMQ_PORT: "5672"
+    RABBITMQ_VHOST: "/"
+    
+    # S3 configuration
+    S3_ENDPOINT: "http://minio.mca-development.svc.cluster.local:9000"
+    S3_REGION: "us-east-1"
+    S3_BUCKET: "mca-documents-development"
+    
+    # Flyway configuration
+    FLYWAY_ENABLED: "true"
+    FLYWAY_BASELINE_ON_MIGRATE: "true"
+    FLYWAY_LOCATIONS: "classpath:db/migrations"
+
+.staging_env: &staging_env
+  variables:
+    # Environment name
+    ENVIRONMENT: staging
+    
+    # Kubernetes configuration
+    REPLICAS: "2"
+    CPU_REQUEST: "250m"
+    CPU_LIMIT: "500m"
+    MEMORY_REQUEST: "512Mi"
+    MEMORY_LIMIT: "1Gi"
+    
+    # JVM configuration
+    JAVA_OPTS: "-Xms256m -Xmx768m -XX:+UseG1GC"
+    
+    # Spring profiles
+    SPRING_PROFILES: "staging"
+    
+    # Database configuration
+    DB_HOST: "postgres-primary.mca-staging.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_READ_REPLICAS: "1"
+    DB_READ_REPLICA_HOSTS: "postgres-replica-0.mca-staging.svc.cluster.local"
+    
+    # Redis configuration
+    REDIS_HOST: "redis.mca-staging.svc.cluster.local"
+    REDIS_PORT: "6379"
+    REDIS_DATA_TTL: "900" # 15 minutes in seconds
+    REDIS_SESSION_TTL: "86400" # 24 hours in seconds
+    
+    # RabbitMQ configuration
+    RABBITMQ_HOST: "rabbitmq.mca-staging.svc.cluster.local"
+    RABBITMQ_PORT: "5672"
+    RABBITMQ_VHOST: "/"
+    
+    # S3 configuration
+    S3_ENDPOINT: "https://minio.mca-staging.svc.cluster.local:9000"
+    S3_REGION: "us-east-1"
+    S3_BUCKET: "mca-documents-staging"
+    
+    # Flyway configuration
+    FLYWAY_ENABLED: "true"
+    FLYWAY_BASELINE_ON_MIGRATE: "true"
+    FLYWAY_LOCATIONS: "classpath:db/migrations"
+
+.production_env: &production_env
+  variables:
+    # Environment name
+    ENVIRONMENT: production
+    
+    # Kubernetes configuration
+    REPLICAS: "3"
+    CPU_REQUEST: "500m"
+    CPU_LIMIT: "1000m"
+    MEMORY_REQUEST: "1Gi"
+    MEMORY_LIMIT: "2Gi"
+    
+    # JVM configuration
+    JAVA_OPTS: "-Xms512m -Xmx1536m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError"
+    
+    # Spring profiles
+    SPRING_PROFILES: "production"
+    
+    # Database configuration
+    DB_HOST: "postgres-primary.mca-production.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_READ_REPLICAS: "2"
+    DB_READ_REPLICA_HOSTS: "postgres-replica-0.mca-production.svc.cluster.local,postgres-replica-1.mca-production.svc.cluster.local"
+    
+    # Redis configuration
+    REDIS_HOST: "redis.mca-production.svc.cluster.local"
+    REDIS_PORT: "6379"
+    REDIS_DATA_TTL: "900" # 15 minutes in seconds
+    REDIS_SESSION_TTL: "86400" # 24 hours in seconds
+    
+    # RabbitMQ configuration
+    RABBITMQ_HOST: "rabbitmq.mca-production.svc.cluster.local"
+    RABBITMQ_PORT: "5672"
+    RABBITMQ_VHOST: "/"
+    
+    # S3 configuration
+    S3_ENDPOINT: "https://minio.mca-production.svc.cluster.local:9000"
+    S3_REGION: "us-east-1"
+    S3_BUCKET: "mca-documents-production"
+    
+    # Flyway configuration
+    FLYWAY_ENABLED: "true"
+    FLYWAY_BASELINE_ON_MIGRATE: "false"
+    FLYWAY_LOCATIONS: "classpath:db/migrations"
+
+# Environment-specific deployment jobs
+deploy:development:
+  extends: .deploy
+  <<: *development_env
+  environment:
+    name: development
+    url: https://dev.dollarfunding.com/api/data
+  only:
+    - development
+    - /^feature\/.*$/
+
+deploy:staging:
+  extends: .deploy
+  <<: *staging_env
+  environment:
+    name: staging
+    url: https://staging.dollarfunding.com/api/data
+  only:
+    - main
+    - /^release\/.*$/
+  when: manual
+
+deploy:production:
+  extends: .deploy
+  <<: *production_env
+  environment:
+    name: production
+    url: https://dollarfunding.com/api/data
+  only:
+    - main
+    - tags
+  when: manual
+
+# Custom deployment job that extends the base deployment
+.deploy:
+  stage: deploy
+  script:
+    # Set up Kubernetes configuration
+    - kubectl config use-context ${K8S_CONTEXT}
+    - kubectl config set-context --current --namespace=${K8S_NAMESPACE}
+    
+    # Create namespace if it doesn't exist
+    - kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Create Kubernetes secrets for sensitive data
+    - |
+      kubectl create secret generic ${APP_NAME}-secrets 
+        --namespace=${K8S_NAMESPACE} 
+        --from-literal=db-username=${DB_USERNAME} 
+        --from-literal=db-password=${DB_PASSWORD} 
+        --from-literal=redis-password=${REDIS_PASSWORD} 
+        --from-literal=rabbitmq-username=${RABBITMQ_USERNAME} 
+        --from-literal=rabbitmq-password=${RABBITMQ_PASSWORD} 
+        --from-literal=s3-access-key=${S3_ACCESS_KEY} 
+        --from-literal=s3-secret-key=${S3_SECRET_KEY} 
+        --from-literal=encryption-key=${ENCRYPTION_KEY} 
+        --from-literal=jwt-private-key="${JWT_PRIVATE_KEY}" 
+        --from-literal=jwt-public-key="${JWT_PUBLIC_KEY}" 
+        --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Deploy using Helm
+    - |
+      helm upgrade --install ${APP_NAME} ${HELM_CHART_PATH} 
+        --namespace=${K8S_NAMESPACE} 
+        --set image.repository=${DOCKER_IMAGE_NAME} 
+        --set image.tag=${CI_COMMIT_SHORT_SHA} 
+        --set replicaCount=${REPLICAS} 
+        --set resources.requests.cpu=${CPU_REQUEST} 
+        --set resources.requests.memory=${MEMORY_REQUEST} 
+        --set resources.limits.cpu=${CPU_LIMIT} 
+        --set resources.limits.memory=${MEMORY_LIMIT} 
+        --set env.JAVA_OPTS="${JAVA_OPTS}" 
+        --set env.SPRING_PROFILES_ACTIVE=${SPRING_PROFILES} 
+        --set env.DB_HOST=${DB_HOST} 
+        --set env.DB_PORT=${DB_PORT} 
+        --set env.DB_NAME=${DB_NAME} 
+        --set env.DB_SCHEMA=${DB_SCHEMA} 
+        --set env.DB_READ_REPLICAS=${DB_READ_REPLICAS} 
+        --set env.DB_READ_REPLICA_HOSTS="${DB_READ_REPLICA_HOSTS}" 
+        --set env.REDIS_HOST=${REDIS_HOST} 
+        --set env.REDIS_PORT=${REDIS_PORT} 
+        --set env.REDIS_DATA_TTL=${REDIS_DATA_TTL} 
+        --set env.REDIS_SESSION_TTL=${REDIS_SESSION_TTL} 
+        --set env.RABBITMQ_HOST=${RABBITMQ_HOST} 
+        --set env.RABBITMQ_PORT=${RABBITMQ_PORT} 
+        --set env.RABBITMQ_VHOST=${RABBITMQ_VHOST} 
+        --set env.S3_ENDPOINT=${S3_ENDPOINT} 
+        --set env.S3_REGION=${S3_REGION} 
+        --set env.S3_BUCKET=${S3_BUCKET} 
+        --set env.FLYWAY_ENABLED=${FLYWAY_ENABLED} 
+        --set env.FLYWAY_BASELINE_ON_MIGRATE=${FLYWAY_BASELINE_ON_MIGRATE} 
+        --set env.FLYWAY_LOCATIONS=${FLYWAY_LOCATIONS} 
+        --set env.APP_NAME=${APP_NAME} 
+        --set env.APP_VERSION=${APP_VERSION} 
+        --set env.JWT_TOKEN_EXPIRY=3600 
+        --set env.JWT_REFRESH_TOKEN_EXPIRY=604800 
+        --set env.JWT_ALGORITHM=RS256 
+        --wait --timeout 10m
+    
+    # Verify deployment
+    - kubectl rollout status deployment/${APP_NAME} -n ${K8S_NAMESPACE} --timeout=300s
+    
+    # Run Flyway migrations if enabled
+    - |
+      if [ "${FLYWAY_ENABLED}" = "true" ]; then
+        echo "Running Flyway migrations..."
+        kubectl exec deployment/${APP_NAME} -n ${K8S_NAMESPACE} -- 
+          java -cp /app org.springframework.boot.loader.JarLauncher 
+          --spring.profiles.active=${SPRING_PROFILES} 
+          --spring.flyway.enabled=true 
+          --spring.flyway.baseline-on-migrate=${FLYWAY_BASELINE_ON_MIGRATE} 
+          --spring.flyway.locations=${FLYWAY_LOCATIONS} 
+          --spring.datasource.url=jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME} 
+          --spring.datasource.username=${DB_USERNAME} 
+          --spring.datasource.password=${DB_PASSWORD} 
+          --spring.main.web-application-type=none 
+          com.dollarfunding.mca.DataServiceApplication
+      fi
+    
+    # Check health endpoint
+    - |
+      echo "Checking health endpoint..."
+      POD_NAME=$(kubectl get pods -n ${K8S_NAMESPACE} -l app.kubernetes.io/name=${APP_NAME} -o jsonpath="{.items[0].metadata.name}")
+      HEALTH_STATUS=$(kubectl exec ${POD_NAME} -n ${K8S_NAMESPACE} -- curl -s http://localhost:8080/actuator/health)
+      echo ${HEALTH_STATUS} | grep '"status":"UP"'
+      
+      if [ $? -ne 0 ]; then
+        echo "Health check failed! Rolling back deployment..."
+        helm rollback ${APP_NAME} -n ${K8S_NAMESPACE}
+        exit 1
+      fi
+      
+      echo "Health check passed! Deployment successful."
+  artifacts:
+    paths:
+      - ${HELM_CHART_PATH}/values.yaml
+    expire_in: 1 week
+
+# Verification job to run after deployment
+verify:
+  stage: verify
+  script:
+    # Set up Kubernetes configuration
+    - kubectl config use-context ${K8S_CONTEXT}
+    - kubectl config set-context --current --namespace=${K8S_NAMESPACE}
+    
+    # Get service URL
+    - SERVICE_URL=$(kubectl get svc ${APP_NAME} -n ${K8S_NAMESPACE} -o jsonpath="{.status.loadBalancer.ingress[0].ip}")
+    
+    # Run verification tests
+    - |
+      echo "Running verification tests against ${SERVICE_URL}..."
+      
+      # Check application info endpoint
+      APP_INFO=$(curl -s http://${SERVICE_URL}:8080/actuator/info)
+      echo ${APP_INFO} | grep '"version":"${APP_VERSION}"'
+      
+      # Check database connection
+      DB_HEALTH=$(curl -s http://${SERVICE_URL}:8080/actuator/health/db)
+      echo ${DB_HEALTH} | grep '"status":"UP"'
+      
+      # Check Redis connection
+      REDIS_HEALTH=$(curl -s http://${SERVICE_URL}:8080/actuator/health/redis)
+      echo ${REDIS_HEALTH} | grep '"status":"UP"'
+      
+      # Check RabbitMQ connection
+      RABBITMQ_HEALTH=$(curl -s http://${SERVICE_URL}:8080/actuator/health/rabbit)
+      echo ${RABBITMQ_HEALTH} | grep '"status":"UP"'
+      
+      # Check custom application health indicators
+      APP_HEALTH=$(curl -s http://${SERVICE_URL}:8080/actuator/health/application)
+      echo ${APP_HEALTH} | grep '"status":"UP"'
+      
+      echo "All verification tests passed!"
+  dependencies:
+    - deploy
+  only:
+    - main
+    - development
+    - /^release\/.*$/
+  when: on_success

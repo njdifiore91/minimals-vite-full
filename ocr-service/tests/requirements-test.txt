@@ -1,0 +1,38 @@
+# OCR Service Test Requirements
+# This file lists all dependencies required for testing the OCR Service
+
+# Core testing framework
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-asyncio==0.21.1
+
+# AWS mocking for S3 storage testing
+moto==4.2.7
+
+# RabbitMQ testing
+pytest-rabbitmq==2.2.1
+amqplib==0.10.3
+
+# TensorFlow testing dependencies
+tensorflow==2.15.0
+tensorflow-gpu==2.15.0
+tf-keras==2.15.0
+tensorflow-datasets==4.9.3
+
+# GPU testing utilities
+gpu-utils==0.5.0
+nvidia-ml-py3==7.352.0
+
+# Coverage and reporting tools
+coverage==7.3.2
+coverage-badge==1.1.0
+
+# HTTP client for API testing
+requests==2.31.0
+requests-mock==1.11.0
+
+# Utility libraries for testing
+pytest-timeout==2.2.0
+pytest-xdist==3.3.1  # For parallel test execution
+pytest-rerunfailures==12.0  # For handling flaky tests

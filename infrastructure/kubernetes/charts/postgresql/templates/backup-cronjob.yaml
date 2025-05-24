@@ -1,0 +1,362 @@
+{{- if .Values.backup.enabled -}}
+# PostgreSQL Backup CronJob
+# This template creates a Kubernetes CronJob that performs scheduled backups of the PostgreSQL database
+# to S3-compatible storage with environment-specific configurations.
+#
+# Features:
+# - Scheduled backups based on environment-specific cron schedule
+# - Backup verification to ensure integrity
+# - Secure storage in S3-compatible storage with AES-256 encryption
+# - Backup metadata for tracking and management
+# - Retention policy for automated cleanup of old backups
+# - Monitoring integration with Prometheus
+# - Notification support for backup status
+# - Support for point-in-time recovery with 5-minute RPO (via WAL archiving)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "postgresql.fullname" . }}-backup
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  annotations:
+    description: "PostgreSQL backup job for {{ .Values.global.applicationName }}"
+    {{- if .Values.annotations }}
+    {{- toYaml .Values.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  # Schedule from values.yaml, defaults to daily at 1:00 AM
+  # For production: "0 1 * * *" (daily at 1:00 AM)
+  # For staging: "0 3 * * *" (daily at 3:00 AM)
+  # For development: "0 5 * * 1-5" (weekdays at 5:00 AM)
+  schedule: {{ .Values.backup.schedule | quote }}
+  # Concurrency policy: forbid new jobs while previous is still running
+  concurrencyPolicy: Forbid
+  # Keep 3 successful and 1 failed job for history
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # Job template
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "postgresql.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backup
+      annotations:
+        {{- if .Values.podAnnotations }}
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- end }}
+    spec:
+      # Set appropriate timeout for backup job (4 hours)
+      activeDeadlineSeconds: 14400
+      template:
+        metadata:
+          labels:
+            {{- include "postgresql.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+          annotations:
+            # Prometheus scraping annotations
+            prometheus.io/scrape: "true"
+            prometheus.io/path: "/metrics"
+            prometheus.io/port: "9187"
+            {{- if .Values.podAnnotations }}
+            {{- toYaml .Values.podAnnotations | nindent 12 }}
+            {{- end }}
+        spec:
+          # Use the same service account as PostgreSQL
+          serviceAccountName: {{ include "postgresql.serviceAccountName" . }}
+          # Security context for the pod
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          # Set specific node selector for backup jobs if defined
+          {{- if .Values.backup.nodeSelector }}
+          nodeSelector:
+            {{- toYaml .Values.backup.nodeSelector | nindent 12 }}
+          {{- else }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          # Containers
+          containers:
+            - name: backup
+              # Use the same PostgreSQL image for backup
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Security context for the container
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              # Command to execute backup
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  # Set error handling
+                  set -e
+                  
+                  # Set variables
+                  BACKUP_DATE=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_FILE="${POSTGRES_DATABASE}_${BACKUP_DATE}.sql.gz"
+                  BACKUP_PATH="/tmp/${BACKUP_FILE}"
+                  S3_BACKUP_PATH="${S3_PATH}/${BACKUP_FILE}"
+                  S3_FULL_PATH="s3://${S3_BUCKET_NAME}/${S3_BACKUP_PATH}"
+                  
+                  echo "Starting PostgreSQL backup at $(date)"
+                  
+                  # Create backup using pg_dump
+                  echo "Creating database dump: ${BACKUP_PATH}"
+                  PGPASSWORD=${POSTGRES_PASSWORD} pg_dump -U ${POSTGRES_USER} -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -F c -b -v -f ${BACKUP_PATH}.dump ${POSTGRES_DATABASE}
+                  
+                  # Compress the backup
+                  echo "Compressing backup file"
+                  gzip -c ${BACKUP_PATH}.dump > ${BACKUP_PATH}
+                  rm ${BACKUP_PATH}.dump
+                  
+                  # Verify backup integrity
+                  echo "Verifying backup integrity"
+                  if gunzip -t ${BACKUP_PATH}; then
+                    echo "Backup verification successful"
+                  else
+                    echo "Backup verification failed"
+                    exit 1
+                  fi
+                  
+                  # Calculate backup size and checksum
+                  BACKUP_SIZE=$(stat -c%s "${BACKUP_PATH}")
+                  BACKUP_MD5=$(md5sum "${BACKUP_PATH}" | cut -d' ' -f1)
+                  echo "Backup size: ${BACKUP_SIZE} bytes, MD5: ${BACKUP_MD5}"
+                  
+                  # Upload to S3
+                  echo "Uploading backup to S3: ${S3_FULL_PATH}"
+                  aws s3 cp ${BACKUP_PATH} ${S3_FULL_PATH} \
+                    --storage-class STANDARD \
+                    --sse ${ENCRYPTION_TYPE} \
+                    --metadata "md5checksum=${BACKUP_MD5},database=${POSTGRES_DATABASE},timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+                  
+                  # Verify upload
+                  echo "Verifying S3 upload"
+                  if aws s3 ls ${S3_FULL_PATH}; then
+                    echo "Upload verification successful"
+                    
+                    # Create backup metadata file
+                    METADATA_FILE="/tmp/backup-metadata-${BACKUP_DATE}.json"
+                    cat > ${METADATA_FILE} << EOF
+                    {
+                      "database": "${POSTGRES_DATABASE}",
+                      "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+                      "filename": "${BACKUP_FILE}",
+                      "size": ${BACKUP_SIZE},
+                      "md5checksum": "${BACKUP_MD5}",
+                      "environment": "${ENVIRONMENT}",
+                      "postgresql_version": "${PG_VERSION}"
+                    }
+                    EOF
+                    
+                    # Upload metadata file
+                    aws s3 cp ${METADATA_FILE} s3://${S3_BUCKET_NAME}/${S3_PATH}/metadata/${BACKUP_DATE}.json \
+                      --storage-class STANDARD \
+                      --sse ${ENCRYPTION_TYPE}
+                    
+                    rm ${METADATA_FILE}
+                  else
+                    echo "Upload verification failed"
+                    exit 1
+                  fi
+                  
+                  # Clean up old backups if retention is enabled
+                  if [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    echo "Cleaning up backups older than ${RETENTION_DAYS} days"
+                    # Calculate date for retention cutoff
+                    RETENTION_DATE=$(date -d "${RETENTION_DAYS} days ago" +%Y-%m-%d)
+                    
+                    # List and delete old backups
+                    aws s3 ls s3://${S3_BUCKET_NAME}/${S3_PATH}/ --recursive | grep ".sql.gz" | while read -r line; do
+                      # Extract date from the line
+                      backup_date=$(echo "${line}" | grep -oP '\d{8}-\d{6}')
+                      if [ ! -z "${backup_date}" ]; then
+                        formatted_date=$(date -d "${backup_date:0:4}-${backup_date:4:2}-${backup_date:6:2} ${backup_date:9:2}:${backup_date:11:2}:${backup_date:13:2}" +%Y-%m-%d 2>/dev/null)
+                        
+                        # Compare with retention date if date conversion was successful
+                        if [ ! -z "${formatted_date}" ] && [[ "${formatted_date}" < "${RETENTION_DATE}" ]]; then
+                          file_path=$(echo "${line}" | awk '{print $4}')
+                          echo "Deleting old backup: ${file_path}"
+                          aws s3 rm s3://${S3_BUCKET_NAME}/${file_path}
+                          
+                          # Also delete corresponding metadata file if it exists
+                          metadata_path=$(echo "${file_path}" | sed 's/\.sql\.gz$//' | sed "s|^|metadata/|" | sed "s|$|.json|")
+                          aws s3 rm s3://${S3_BUCKET_NAME}/${metadata_path} 2>/dev/null || true
+                        fi
+                      fi
+                    done
+                  fi
+                  
+                  # Clean up local backup file
+                  echo "Cleaning up local backup file"
+                  rm -f ${BACKUP_PATH}
+                  
+                  echo "Backup completed successfully at $(date)"
+                  
+                  # Send success notification if configured
+                  if [ ! -z "${NOTIFICATION_URL}" ]; then
+                    curl -X POST ${NOTIFICATION_URL} \
+                      -H "Content-Type: application/json" \
+                      -d "{\
+                        \"status\": \"success\",\
+                        \"database\": \"${POSTGRES_DATABASE}\",\
+                        \"timestamp\": \"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\",\
+                        \"backup_file\": \"${BACKUP_FILE}\",\
+                        \"environment\": \"${ENVIRONMENT}\"\
+                      }"
+                  fi
+              # Environment variables
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "postgresql.fullname" . }}
+                      key: postgres-user
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "postgresql.fullname" . }}
+                      key: postgres-password
+                - name: POSTGRES_DATABASE
+                  value: {{ .Values.postgresql.database }}
+                - name: POSTGRES_HOST
+                  value: {{ include "postgresql.fullname" . }}
+                - name: POSTGRES_PORT
+                  value: "{{ .Values.service.port }}"
+                - name: S3_BUCKET_NAME
+                  value: {{ .Values.backup.s3.bucketName }}
+                - name: S3_PATH
+                  value: {{ .Values.backup.s3.path }}
+                - name: S3_REGION
+                  value: {{ .Values.backup.s3.region }}
+                - name: RETENTION_DAYS
+                  value: "{{ .Values.backup.retentionDays }}"
+                - name: AWS_REGION
+                  value: {{ .Values.backup.s3.region }}
+                - name: ENCRYPTION_TYPE
+                  value: {{ .Values.backup.s3.encryption | default "AES256" }}
+                - name: ENVIRONMENT
+                  value: {{ .Values.global.environment }}
+                - name: PG_VERSION
+                  value: {{ .Values.global.postgresVersion }}
+                - name: NOTIFICATION_URL
+                  value: "{{ .Values.backup.notificationUrl | default "" }}"
+              # Resource limits
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              # Volume mounts for temporary storage
+              volumeMounts:
+                - name: backup-temp
+                  mountPath: /tmp
+            # Add AWS CLI sidecar container for S3 operations
+            - name: aws-cli
+              image: "amazon/aws-cli:2.15.0"
+              imagePullPolicy: IfNotPresent
+              # Use init container pattern with shared volume
+              command: ["sh", "-c"]
+              args:
+                - |
+                  # Install required tools for backup verification and monitoring
+                  yum install -y jq gzip tar
+                  
+                  # Create directories for backup operations
+                  mkdir -p /tmp/backup-tools
+                  
+                  # Create helper script for backup verification
+                  cat > /tmp/backup-tools/verify-backup.sh << 'EOF'
+                  #!/bin/bash
+                  set -e
+                  
+                  BACKUP_FILE=$1
+                  
+                  if [ -z "$BACKUP_FILE" ]; then
+                    echo "Error: Backup file not specified"
+                    exit 1
+                  fi
+                  
+                  if [ ! -f "$BACKUP_FILE" ]; then
+                    echo "Error: Backup file not found: $BACKUP_FILE"
+                    exit 1
+                  fi
+                  
+                  # Verify gzip integrity
+                  echo "Verifying gzip integrity..."
+                  if gunzip -t "$BACKUP_FILE"; then
+                    echo "Gzip integrity check passed"
+                  else
+                    echo "Gzip integrity check failed"
+                    exit 1
+                  fi
+                  
+                  echo "Backup verification completed successfully"
+                  exit 0
+                  EOF
+                  
+                  chmod +x /tmp/backup-tools/verify-backup.sh
+                  
+                  # Wait for backup container to complete its work
+                  echo "AWS CLI container ready for backup operations"
+                  sleep infinity
+              # Environment variables for AWS CLI
+              env:
+                - name: AWS_REGION
+                  value: {{ .Values.backup.s3.region }}
+                # Use IAM role from service account for authentication
+                # This requires proper configuration of the service account with IAM roles
+                # If not using IAM roles, uncomment and use AWS credentials from a secret
+                {{- if .Values.backup.s3.credentials }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "postgresql.fullname" . }}-backup-aws
+                      key: aws-access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "postgresql.fullname" . }}-backup-aws
+                      key: aws-secret-access-key
+                {{- end }}
+              # Resource limits for AWS CLI container
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"
+              # Volume mounts for temporary storage
+              volumeMounts:
+                - name: backup-temp
+                  mountPath: /tmp
+          # Volumes
+          volumes:
+            - name: backup-temp
+              emptyDir:
+                # Set size limit for backup temporary storage
+                sizeLimit: "2Gi"
+                # Use memory medium for faster I/O if available
+                {{- if eq .Values.global.environment "production" }}
+                medium: Memory
+                {{- end }}
+          # Restart policy for the pod
+          restartPolicy: OnFailure
+          # Node selector is now defined above with backup-specific override
+          # Affinity rules
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Tolerations
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

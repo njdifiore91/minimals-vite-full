@@ -1,0 +1,232 @@
+# PostgreSQL queries for the PostgreSQL exporter
+# These queries collect metrics specific to the MCA Application Processing System
+
+# Connection metrics
+pg_stat_activity:
+  query: |
+    SELECT
+      datname,
+      state,
+      count(*) as count
+    FROM pg_stat_activity
+    GROUP BY datname, state
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - state:
+        usage: "LABEL"
+        description: "Connection state"
+    - count:
+        usage: "GAUGE"
+        description: "Number of connections in this state"
+
+# Database size metrics
+pg_database_size:
+  query: |
+    SELECT
+      datname,
+      pg_database_size(datname) as size_bytes
+    FROM pg_database
+    WHERE datname NOT LIKE 'template%'
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+# Table metrics
+pg_stat_user_tables:
+  query: |
+    SELECT
+      schemaname,
+      relname,
+      seq_scan,
+      seq_tup_read,
+      idx_scan,
+      idx_tup_fetch,
+      n_tup_ins,
+      n_tup_upd,
+      n_tup_del,
+      n_live_tup,
+      n_dead_tup,
+      last_vacuum,
+      last_autovacuum,
+      last_analyze,
+      last_autoanalyze,
+      vacuum_count,
+      autovacuum_count,
+      analyze_count,
+      autoanalyze_count
+    FROM pg_stat_user_tables
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - relname:
+        usage: "LABEL"
+        description: "Table name"
+    - seq_scan:
+        usage: "COUNTER"
+        description: "Number of sequential scans"
+    - seq_tup_read:
+        usage: "COUNTER"
+        description: "Number of tuples read by sequential scans"
+    - idx_scan:
+        usage: "COUNTER"
+        description: "Number of index scans"
+    - idx_tup_fetch:
+        usage: "COUNTER"
+        description: "Number of tuples fetched by index scans"
+    - n_tup_ins:
+        usage: "COUNTER"
+        description: "Number of tuples inserted"
+    - n_tup_upd:
+        usage: "COUNTER"
+        description: "Number of tuples updated"
+    - n_tup_del:
+        usage: "COUNTER"
+        description: "Number of tuples deleted"
+    - n_live_tup:
+        usage: "GAUGE"
+        description: "Number of live tuples"
+    - n_dead_tup:
+        usage: "GAUGE"
+        description: "Number of dead tuples"
+    - vacuum_count:
+        usage: "COUNTER"
+        description: "Number of manual vacuums"
+    - autovacuum_count:
+        usage: "COUNTER"
+        description: "Number of automatic vacuums"
+    - analyze_count:
+        usage: "COUNTER"
+        description: "Number of manual analyzes"
+    - autoanalyze_count:
+        usage: "COUNTER"
+        description: "Number of automatic analyzes"
+
+# Index metrics
+pg_stat_user_indexes:
+  query: |
+    SELECT
+      schemaname,
+      relname,
+      indexrelname,
+      idx_scan,
+      idx_tup_read,
+      idx_tup_fetch
+    FROM pg_stat_user_indexes
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - relname:
+        usage: "LABEL"
+        description: "Table name"
+    - indexrelname:
+        usage: "LABEL"
+        description: "Index name"
+    - idx_scan:
+        usage: "COUNTER"
+        description: "Number of index scans"
+    - idx_tup_read:
+        usage: "COUNTER"
+        description: "Number of index entries returned by scans"
+    - idx_tup_fetch:
+        usage: "COUNTER"
+        description: "Number of live table rows fetched by index scans"
+
+# MCA application specific metrics
+mca_application_count:
+  query: |
+    SELECT
+      status,
+      count(*) as count
+    FROM applications
+    GROUP BY status
+  metrics:
+    - status:
+        usage: "LABEL"
+        description: "Application status"
+    - count:
+        usage: "GAUGE"
+        description: "Number of applications in this status"
+
+mca_document_count:
+  query: |
+    SELECT
+      type,
+      count(*) as count
+    FROM documents
+    GROUP BY type
+  metrics:
+    - type:
+        usage: "LABEL"
+        description: "Document type"
+    - count:
+        usage: "GAUGE"
+        description: "Number of documents of this type"
+
+mca_processing_time:
+  query: |
+    SELECT
+      avg(extract(epoch from (updated_at - created_at))) as avg_processing_time_seconds
+    FROM applications
+    WHERE status = 'completed'
+    AND updated_at > now() - interval '24 hours'
+  metrics:
+    - avg_processing_time_seconds:
+        usage: "GAUGE"
+        description: "Average application processing time in seconds over the last 24 hours"
+
+mca_application_age:
+  query: |
+    SELECT
+      status,
+      avg(extract(epoch from (now() - created_at))) as avg_age_seconds
+    FROM applications
+    WHERE status NOT IN ('completed', 'rejected')
+    GROUP BY status
+  metrics:
+    - status:
+        usage: "LABEL"
+        description: "Application status"
+    - avg_age_seconds:
+        usage: "GAUGE"
+        description: "Average age of applications in this status in seconds"
+
+mca_merchant_count:
+  query: |
+    SELECT count(*) as merchant_count
+    FROM merchant_details
+  metrics:
+    - merchant_count:
+        usage: "GAUGE"
+        description: "Total number of merchants in the system"
+
+# Connection pool metrics
+mca_hikari_pool_stats:
+  query: |
+    SELECT
+      'mca_pool' as pool,
+      count(*) as total_connections,
+      sum(CASE WHEN state = 'active' THEN 1 ELSE 0 END) as active_connections,
+      sum(CASE WHEN state = 'idle' THEN 1 ELSE 0 END) as idle_connections
+    FROM pg_stat_activity
+    WHERE application_name LIKE 'HikariCP%'
+  metrics:
+    - pool:
+        usage: "LABEL"
+        description: "Connection pool name"
+    - total_connections:
+        usage: "GAUGE"
+        description: "Total number of connections in the pool"
+    - active_connections:
+        usage: "GAUGE"
+        description: "Number of active connections in the pool"
+    - idle_connections:
+        usage: "GAUGE"
+        description: "Number of idle connections in the pool"

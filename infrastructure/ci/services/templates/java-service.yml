@@ -1,0 +1,298 @@
+# Java Microservice CI/CD Template
+# Used for Data Service built with Spring Boot
+# Requires Java SDK 21.x (LTS)
+#
+# This template defines a standardized CI/CD workflow for Java microservices with the following features:
+# - Maven dependency management and build process
+# - Code quality checks with CheckStyle and SpotBugs
+# - Unit and integration testing with JUnit and coverage reporting
+# - Multi-stage Docker builds to minimize image size
+# - Vulnerability scanning for dependencies and container images
+# - Kubernetes deployment with Helm charts
+# - Post-deployment health checks with service-specific validations
+
+name: Java Service CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'data-service/**'
+      - 'infrastructure/ci/services/templates/java-service.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'data-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      service:
+        description: 'Service to deploy'
+        required: true
+        type: choice
+        options:
+          - data-service
+
+# Global environment variables
+env:
+  JAVA_VERSION: '21'
+  MAVEN_VERSION: '3.9.6'
+  MAVEN_OPTS: '-Xmx4g -Xms1g -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
+  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+
+jobs:
+  # Determine which service directory has changed
+  changes:
+    name: Detect Service Changes
+    runs-on: ubuntu-latest
+    outputs:
+      data_service: ${{ steps.filter.outputs.data_service }}
+      service_name: ${{ steps.set-service.outputs.service_name }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Filter for service changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            data_service:
+              - 'data-service/**'
+
+      - name: Set service name from changes
+        id: set-service
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "service_name=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.filter.outputs.data_service }}" == "true" ]]; then
+            echo "service_name=data-service" >> $GITHUB_OUTPUT
+          else
+            echo "No service changes detected"
+            exit 1
+          fi
+
+  # Code quality and testing
+  quality:
+    name: Code Quality & Testing
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Verify Maven version
+        run: mvn --version
+
+      - name: Run CheckStyle
+        working-directory: ${{ matrix.service }}
+        run: mvn checkstyle:check
+
+      - name: Run SpotBugs
+        working-directory: ${{ matrix.service }}
+        run: mvn spotbugs:check
+
+      - name: Run Unit Tests
+        working-directory: ${{ matrix.service }}
+        run: mvn test
+
+      - name: Run Integration Tests
+        working-directory: ${{ matrix.service }}
+        run: mvn verify -DskipUnitTests
+
+      - name: Generate JaCoCo Coverage Report
+        working-directory: ${{ matrix.service }}
+        run: mvn jacoco:report
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ${{ matrix.service }}/target/site/jacoco/jacoco.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+
+      - name: Check for Maven vulnerabilities
+        working-directory: ${{ matrix.service }}
+        run: mvn dependency-check:check
+        continue-on-error: true # Don't fail the build, but report vulnerabilities
+
+  # Build and package
+  build:
+    name: Build and Package
+    needs: [changes, quality]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build with Maven
+        working-directory: ${{ matrix.service }}
+        run: mvn clean package -DskipTests
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.service }}-jar
+          path: ${{ matrix.service }}/target/*.jar
+          retention-days: 7
+
+      # Set up Docker Buildx for multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Extract version from pom.xml
+      - name: Extract version
+        id: version
+        working-directory: ${{ matrix.service }}
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
+
+      # Build and push Docker image with multi-stage build
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service }}
+          file: ${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+          build-args: |
+            JAVA_VERSION=${{ env.JAVA_VERSION }}
+            JAR_FILE=target/*.jar
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.service }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.service }}:buildcache,mode=max
+
+      # Scan container image for vulnerabilities
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Deploy to Kubernetes
+  deploy:
+    name: Deploy to Kubernetes
+    needs: [changes, build]
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Set environment variables
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}" >> $GITHUB_ENV
+
+      # Configure kubectl
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+
+      # Install Helm
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.3'
+
+      # Deploy with Helm
+      - name: Deploy to Kubernetes with Helm
+        run: |
+          # Get the image tag from the build job
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          SERVICE_VERSION=$(mvn -f ${{ matrix.service }}/pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout)
+          
+          # Deploy using Helm
+          helm upgrade --install ${{ matrix.service }}-${{ env.ENVIRONMENT }} \
+            ./infrastructure/kubernetes/charts/${{ matrix.service }} \
+            --namespace ${{ env.ENVIRONMENT }} \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ matrix.service }} \
+            --set image.tag=${SERVICE_VERSION}-${IMAGE_TAG} \
+            --set environment=${{ env.ENVIRONMENT }} \
+            --values ./infrastructure/kubernetes/charts/${{ matrix.service }}/values-${{ env.ENVIRONMENT }}.yaml
+
+      # Verify deployment
+      - name: Verify deployment
+        run: |
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} --timeout=300s
+          
+          # Wait for service to stabilize
+          sleep 15
+          
+          # Check if service is healthy with Spring Boot specific health check
+          kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8080/actuator/health | grep -q '{"status":"UP"}'
+          
+          # Check for specific service health indicators
+          if [[ "${{ matrix.service }}" == "data-service" ]]; then
+            # Verify data service can connect to PostgreSQL
+            kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8080/actuator/health/db | grep -q '{"status":"UP"}'
+            
+            # Verify data service can connect to RabbitMQ
+            kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8080/actuator/health/rabbit | grep -q '{"status":"UP"}'
+            
+            # Verify data service can connect to Redis
+            kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8080/actuator/health/redis | grep -q '{"status":"UP"}'
+          fi
+          
+          echo "Deployment of ${{ matrix.service }} to ${{ env.ENVIRONMENT }} completed successfully"

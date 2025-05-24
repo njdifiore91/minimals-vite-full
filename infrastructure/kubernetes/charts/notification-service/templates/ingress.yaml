@@ -1,0 +1,168 @@
+{{- /*
+Notification Service Ingress Configuration
+
+This template creates a Kubernetes Ingress resource for exposing the Notification Service API
+endpoints externally through the Kong API Gateway. It configures routing rules, TLS settings,
+and annotations for proper security and access control.
+
+The Ingress resource routes external requests to the Notification Service for webhook
+configuration and management, with appropriate rate limiting and security controls.
+*/ -}}
+
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "common.fullname" . -}}
+{{- $svcName := .Values.ingress.serviceName | default $fullName -}}
+{{- $svcPort := .Values.ingress.servicePort | default 3000 -}}
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/part-of: "mca-system"
+    {{- with .Values.ingress.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Standard Kubernetes ingress annotations
+    {{- if .Values.ingress.annotations }}
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- end }}
+    
+    # Kong API Gateway specific annotations
+    konghq.com/protocols: "https"
+    konghq.com/preserve-client-ip: "true"
+    
+    # Security headers for all responses
+    konghq.com/plugins: |
+      # Security headers plugin
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
+              - "X-Content-Type-Options: nosniff"
+              - "X-XSS-Protection: 1; mode=block"
+              - "X-Frame-Options: DENY"
+              - "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; connect-src 'self'"
+              - "Referrer-Policy: strict-origin-when-cross-origin"
+              - "Permissions-Policy: geolocation=(), microphone=(), camera=()"
+      
+      # JWT Authentication plugin for secured endpoints
+      - name: jwt
+        config:
+          claims_to_verify:
+            - exp
+            - nbf
+          key_claim_name: kid
+          secret_is_base64: false
+          run_on_preflight: true
+          maximum_expiration: 3600
+          cookie_names: []
+          uri_param_names: []
+        {{- if .Values.ingress.auth.enabled }}
+        # Apply only to specific routes that require authentication
+        route_by_methods:
+          GET: ["{{ .Values.ingress.basePath }}/webhooks"]
+          POST: ["{{ .Values.ingress.basePath }}/webhooks"]
+          PUT: ["{{ .Values.ingress.basePath }}/webhooks/*"]
+          DELETE: ["{{ .Values.ingress.basePath }}/webhooks/*"]
+        {{- end }}
+      
+      # CORS configuration
+      - name: cors
+        config:
+          origins: {{ .Values.ingress.cors.origins | default "https://app.dollarfunding.com" | quote }}
+          methods: {{ .Values.ingress.cors.methods | default "GET, POST, PUT, PATCH, DELETE, OPTIONS" | quote }}
+          headers: {{ .Values.ingress.cors.headers | default "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Auth-Token, Authorization" | quote }}
+          exposed_headers: {{ .Values.ingress.cors.exposedHeaders | default "" | quote }}
+          credentials: {{ .Values.ingress.cors.credentials | default true }}
+          max_age: {{ .Values.ingress.cors.maxAge | default 3600 }}
+      
+      # Rate limiting configuration - different limits for different endpoints
+      - name: rate-limiting
+        config:
+          second: null
+          minute: {{ .Values.ingress.rateLimit.perMinute | default 60 }}
+          hour: {{ .Values.ingress.rateLimit.perHour | default 1000 }}
+          policy: {{ .Values.ingress.rateLimit.policy | default "redis" }}
+          fault_tolerant: true
+          hide_client_headers: false
+          {{- if .Values.ingress.rateLimit.redis }}
+          redis_host: {{ .Values.ingress.rateLimit.redis.host | default "redis" }}
+          redis_port: {{ .Values.ingress.rateLimit.redis.port | default 6379 }}
+          redis_password: {{ .Values.ingress.rateLimit.redis.password | default "" }}
+          redis_timeout: {{ .Values.ingress.rateLimit.redis.timeout | default 2000 }}
+          {{- end }}
+      
+      # Stricter rate limiting for webhook configuration endpoints
+      - name: rate-limiting
+        config:
+          second: null
+          minute: {{ .Values.ingress.rateLimit.webhookConfig.perMinute | default 10 }}
+          hour: {{ .Values.ingress.rateLimit.webhookConfig.perHour | default 100 }}
+          policy: {{ .Values.ingress.rateLimit.policy | default "redis" }}
+          fault_tolerant: true
+          hide_client_headers: false
+          {{- if .Values.ingress.rateLimit.redis }}
+          redis_host: {{ .Values.ingress.rateLimit.redis.host | default "redis" }}
+          redis_port: {{ .Values.ingress.rateLimit.redis.port | default 6379 }}
+          redis_password: {{ .Values.ingress.rateLimit.redis.password | default "" }}
+          redis_timeout: {{ .Values.ingress.rateLimit.redis.timeout | default 2000 }}
+          {{- end }}
+        # Apply only to webhook configuration endpoints
+        route_by_methods:
+          POST: ["{{ .Values.ingress.basePath }}/webhooks"]
+          PUT: ["{{ .Values.ingress.basePath }}/webhooks/*"]
+          DELETE: ["{{ .Values.ingress.basePath }}/webhooks/*"]
+
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | default "kong" }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName | default "notification-service-tls" }}
+  {{- end }}
+  
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          # API v1 endpoints
+          - path: {{ $.Values.ingress.basePath | default "/api/v1/notifications" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svcName }}
+                port:
+                  number: {{ $svcPort }}
+          
+          # Webhook configuration endpoints
+          - path: {{ $.Values.ingress.basePath | default "/api/v1/webhooks" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svcName }}
+                port:
+                  number: {{ $svcPort }}
+          
+          # Health check endpoints (publicly accessible)
+          - path: {{ $.Values.ingress.basePath | default "/api/v1/health" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svcName }}
+                port:
+                  number: {{ $svcPort }}
+    {{- end }}
+{{- end }}

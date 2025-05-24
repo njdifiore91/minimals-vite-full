@@ -1,0 +1,453 @@
+# Production environment configuration values for MCA Application Processing System
+# This file contains production-specific overrides for the common values
+
+# Global settings
+global:
+  environment: production
+  domain: api.dollarfunding.com
+  logLevel: INFO
+  monitoring:
+    enabled: true
+    datadog:
+      enabled: true
+      apiKey: ${DATADOG_API_KEY}
+      appKey: ${DATADOG_APP_KEY}
+  featureFlags:
+    automationEnabled: true
+    aiOcrEnabled: true
+    webhooksEnabled: true
+
+# Database configuration
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 100Gi
+    resources:
+      requests:
+        cpu: 2
+        memory: 8Gi
+      limits:
+        cpu: 4
+        memory: 16Gi
+  readReplicas:
+    # 2 read replicas for production as specified in technical specification
+    replicaCount: 2
+    persistence:
+      size: 100Gi
+    resources:
+      requests:
+        cpu: 1
+        memory: 4Gi
+      limits:
+        cpu: 2
+        memory: 8Gi
+  auth:
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    database: mca_production
+  connectionPool:
+    maxConnections: 100
+    minConnections: 10
+    maxIdleTime: 60000
+
+# Redis cache configuration
+redis:
+  enabled: true
+  cluster:
+    enabled: true
+    slaveCount: 2
+  sentinel:
+    enabled: true
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 1
+      memory: 4Gi
+    limits:
+      cpu: 2
+      memory: 8Gi
+  auth:
+    password: ${REDIS_PASSWORD}
+  config:
+    # TTL settings as specified in technical specification
+    # 15 minutes for application data, 24 hours for user sessions
+    maxmemory-policy: volatile-lru
+    appendonly: "yes"
+    ttl:
+      applicationData: 900  # 15 minutes in seconds
+      userSessions: 86400  # 24 hours in seconds
+
+# RabbitMQ configuration
+rabbitmq:
+  enabled: true
+  replicaCount: 3
+  clustering:
+    enabled: true
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 1
+      memory: 2Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  auth:
+    username: ${RABBITMQ_USER}
+    password: ${RABBITMQ_PASSWORD}
+  # Message exchanges and queues as specified in technical specification
+  exchanges:
+    - name: mca.documents
+      type: fanout
+      durable: true
+  queues:
+    - name: document-processing
+      durable: true
+    - name: data-extraction
+      durable: true
+    - name: notification
+      durable: true
+  plugins:
+    - rabbitmq_management
+    - rabbitmq_prometheus
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# S3-compatible storage configuration
+s3Storage:
+  enabled: true
+  # 'mca-documents-production' bucket as specified in technical specification
+  bucketName: mca-documents-production
+  region: ${S3_REGION}
+  endpoint: ${S3_ENDPOINT}
+  credentials:
+    accessKey: ${S3_ACCESS_KEY}
+    secretKey: ${S3_SECRET_KEY}
+  encryption:
+    # AES-256 encryption for document storage as specified
+    enabled: true
+    type: AES256
+  versioning:
+    enabled: true
+  lifecycle:
+    enabled: true
+    rules:
+      - id: document-retention
+        status: Enabled
+        expiration:
+          days: 2555  # 7-year retention period
+
+# Email Service configuration
+emailService:
+  enabled: true
+  replicaCount: 3  # High availability with 3 replicas
+  image:
+    repository: dollarfunding/email-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  config:
+    imap:
+      host: ${EMAIL_IMAP_HOST}
+      port: 993
+      user: submissions@dollarfunding.com
+      password: ${EMAIL_PASSWORD}
+      secure: true
+      pollInterval: 60  # seconds
+    rabbitmq:
+      exchange: mca.documents
+      routingKey: email.received
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+# Document Service configuration
+documentService:
+  enabled: true
+  replicaCount: 4  # High availability with 4 replicas
+  image:
+    repository: dollarfunding/document-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 1
+      memory: 2Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - document-processing
+    s3:
+      bucketName: mca-documents-production
+    modelPath: /app/models
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+  persistence:
+    enabled: true
+    size: 10Gi
+    mountPath: /app/models
+
+# OCR Service configuration
+ocrService:
+  enabled: true
+  replicaCount: 5  # High availability with 5 replicas
+  image:
+    repository: dollarfunding/ocr-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    # GPU resources for OCR service as specified in technical specification
+    requests:
+      cpu: 2
+      memory: 4Gi
+      nvidia.com/gpu: 1
+    limits:
+      cpu: 4
+      memory: 8Gi
+      nvidia.com/gpu: 1
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - data-extraction
+    s3:
+      bucketName: mca-documents-production
+    modelPath: /app/models
+    confidenceThreshold: 0.85  # 85% confidence threshold for extraction
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+  persistence:
+    enabled: true
+    size: 20Gi
+    mountPath: /app/models
+  nodeSelector:
+    accelerator: gpu  # Ensure pods are scheduled on GPU-enabled nodes
+
+# Data Service configuration
+dataService:
+  enabled: true
+  replicaCount: 4  # High availability with 4 replicas
+  image:
+    repository: dollarfunding/data-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 2
+      memory: 4Gi
+    limits:
+      cpu: 4
+      memory: 8Gi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - notification
+    database:
+      url: jdbc:postgresql://postgresql:5432/mca_production
+      username: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      poolSize: 50
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASSWORD}
+    encryption:
+      enabled: true
+      algorithm: AES-256
+      key: ${ENCRYPTION_KEY}
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+  flyway:
+    enabled: true
+    locations: classpath:db/migrations
+
+# Notification Service configuration
+notificationService:
+  enabled: true
+  replicaCount: 3  # High availability with 3 replicas
+  image:
+    repository: dollarfunding/notification-service
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  config:
+    rabbitmq:
+      exchange: mca.documents
+      queues:
+        - notification
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASSWORD}
+    webhook:
+      retryCount: 5
+      retryDelay: 60  # seconds
+      timeout: 30  # seconds
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+
+# API Gateway configuration
+apiGateway:
+  enabled: true
+  replicaCount: 5  # High availability with 5 replicas
+  image:
+    repository: kong/kong-gateway
+    tag: 3.0
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 1
+      memory: 2Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  config:
+    database:
+      enabled: false  # Use DB-less mode
+    admin:
+      enabled: true
+      http:
+        enabled: true
+        port: 8001
+      tls:
+        enabled: false
+    proxy:
+      enabled: true
+      http:
+        enabled: true
+        port: 80
+      tls:
+        enabled: true
+        port: 443
+        cert: ${TLS_CERT}
+        key: ${TLS_KEY}
+    ingressController:
+      enabled: true
+      installCRDs: false
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 70
+  plugins:
+    - name: jwt
+      config:
+        secret_is_base64: false
+        key_claim_name: kid
+        claims_to_verify:
+          - exp
+    - name: rate-limiting
+      config:
+        second: 10
+        minute: 100
+        hour: 1000
+        policy: local
+    - name: cors
+      config:
+        origins:
+          - https://app.dollarfunding.com
+        methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        headers:
+          - Authorization
+          - Content-Type
+        credentials: true
+        max_age: 3600
+
+# Ingress configuration
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: api.dollarfunding.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: api-dollarfunding-tls
+      hosts:
+        - api.dollarfunding.com
+
+# Monitoring and observability configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  grafana:
+    enabled: true
+    adminPassword: ${GRAFANA_PASSWORD}
+    dashboards:
+      enabled: true
+  alertmanager:
+    enabled: true
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        group_by: ['job']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 12h
+        receiver: 'email-notifications'
+      receivers:
+        - name: 'email-notifications'
+          email_configs:
+            - to: 'alerts@dollarfunding.com'
+              from: 'alertmanager@dollarfunding.com'
+              smarthost: ${SMTP_HOST}:587
+              auth_username: ${SMTP_USER}
+              auth_password: ${SMTP_PASSWORD}
+              send_resolved: true

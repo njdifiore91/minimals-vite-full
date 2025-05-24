@@ -1,0 +1,828 @@
+{
+  "manifest_version": "1.0",
+  "description": "Manifest of high-quality typed document test samples for OCR validation",
+  "created_at": "2025-05-23T10:00:00Z",
+  "updated_at": "2025-05-23T10:00:00Z",
+  "quality_level": "high",
+  "quality_parameters": {
+    "resolution_range_dpi": [300, 600],
+    "contrast_range": [0.8, 1.0],
+    "noise_level_range": [0.0, 0.05],
+    "blur_sigma_range": [0.0, 0.1],
+    "skew_angle_range_degrees": [-0.5, 0.5],
+    "compression_artifacts_range": [0.0, 0.1],
+    "lighting_uniformity_range": [0.9, 1.0]
+  },
+  "expected_performance": {
+    "character_accuracy_range": [0.98, 0.999],
+    "word_accuracy_range": [0.97, 0.999],
+    "field_extraction_accuracy_range": [0.96, 0.999],
+    "confidence_score_range": [0.95, 0.999],
+    "processing_time_multiplier": 1.0
+  },
+  "documents": [
+    {
+      "file_name": "loan_application_high_001.pdf",
+      "document_type": "loan_application",
+      "document_subtype": "merchant_cash_advance",
+      "page_count": 2,
+      "quality_metrics": {
+        "resolution_dpi": 450,
+        "contrast_ratio": 0.92,
+        "noise_level": 0.02,
+        "blur_sigma": 0.05,
+        "skew_angle_degrees": 0.2,
+        "compression_artifacts": 0.03,
+        "lighting_uniformity": 0.95
+      },
+      "expected_results": {
+        "fields": [
+          {
+            "field_name": "business_name",
+            "expected_value": "Coastal Supplies Inc.",
+            "expected_confidence": 0.98,
+            "bounding_box": [120, 240, 450, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "dba_name",
+            "expected_value": "Coastal Supply Co.",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 310, 450, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "ein",
+            "expected_value": "83-2947561",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 240, 650, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "business_address",
+            "expected_value": "1742 Harbor Way, Suite 100, Portland, OR 97201",
+            "expected_confidence": 0.96,
+            "bounding_box": [120, 380, 650, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "business_phone",
+            "expected_value": "503-555-7890",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 310, 650, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "contact_name",
+            "expected_value": "Michael J. Thompson",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 450, 450, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "contact_title",
+            "expected_value": "Chief Financial Officer",
+            "expected_confidence": 0.96,
+            "bounding_box": [520, 450, 650, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "contact_email",
+            "expected_value": "mthompson@coastalsupplies.com",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 520, 450, 550],
+            "page_number": 1
+          },
+          {
+            "field_name": "funding_amount_requested",
+            "expected_value": "$75,000.00",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 590, 250, 620],
+            "page_number": 1
+          },
+          {
+            "field_name": "monthly_revenue",
+            "expected_value": "$125,000.00",
+            "expected_confidence": 0.98,
+            "bounding_box": [320, 590, 450, 620],
+            "page_number": 1
+          },
+          {
+            "field_name": "years_in_business",
+            "expected_value": "5",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 590, 550, 620],
+            "page_number": 1
+          },
+          {
+            "field_name": "signature",
+            "expected_value": "Michael Thompson",
+            "expected_confidence": 0.95,
+            "bounding_box": [120, 720, 350, 750],
+            "page_number": 2
+          },
+          {
+            "field_name": "date",
+            "expected_value": "04/15/2025",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 720, 650, 750],
+            "page_number": 2
+          }
+        ],
+        "tables": [
+          {
+            "table_name": "bank_accounts",
+            "page_number": 2,
+            "bounding_box": [120, 240, 650, 380],
+            "expected_confidence": 0.96,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "account_type", "expected_value": "Checking", "expected_confidence": 0.98},
+                  {"column_name": "bank_name", "expected_value": "First National Bank", "expected_confidence": 0.97},
+                  {"column_name": "account_number", "expected_value": "****3456", "expected_confidence": 0.99},
+                  {"column_name": "average_balance", "expected_value": "$42,500.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "account_type", "expected_value": "Savings", "expected_confidence": 0.98},
+                  {"column_name": "bank_name", "expected_value": "First National Bank", "expected_confidence": 0.97},
+                  {"column_name": "account_number", "expected_value": "****7890", "expected_confidence": 0.99},
+                  {"column_name": "average_balance", "expected_value": "$35,750.00", "expected_confidence": 0.97}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "processing_advantages": [
+        "High resolution (450 DPI) ensures clear character definition",
+        "Excellent contrast makes field boundaries easily detectable",
+        "Minimal noise provides clean text extraction",
+        "Negligible skew ensures proper table alignment",
+        "Uniform lighting ensures consistent text recognition across the document"
+      ]
+    },
+    {
+      "file_name": "tax_return_high_001.pdf",
+      "document_type": "tax_return",
+      "document_subtype": "business_1120",
+      "page_count": 3,
+      "quality_metrics": {
+        "resolution_dpi": 400,
+        "contrast_ratio": 0.90,
+        "noise_level": 0.03,
+        "blur_sigma": 0.04,
+        "skew_angle_degrees": 0.1,
+        "compression_artifacts": 0.02,
+        "lighting_uniformity": 0.96
+      },
+      "expected_results": {
+        "fields": [
+          {
+            "field_name": "business_name",
+            "expected_value": "Coastal Supplies Inc.",
+            "expected_confidence": 0.98,
+            "bounding_box": [120, 240, 450, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "ein",
+            "expected_value": "83-2947561",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 240, 650, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "tax_year",
+            "expected_value": "2024",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 310, 580, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "total_income",
+            "expected_value": "$1,458,750.00",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 450, 650, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "total_deductions",
+            "expected_value": "$1,125,430.00",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 520, 650, 550],
+            "page_number": 1
+          },
+          {
+            "field_name": "taxable_income",
+            "expected_value": "$333,320.00",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 590, 650, 620],
+            "page_number": 1
+          },
+          {
+            "field_name": "total_tax",
+            "expected_value": "$69,997.20",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 660, 650, 690],
+            "page_number": 1
+          },
+          {
+            "field_name": "officer_signature",
+            "expected_value": "Michael Thompson",
+            "expected_confidence": 0.95,
+            "bounding_box": [120, 720, 350, 750],
+            "page_number": 3
+          },
+          {
+            "field_name": "signature_date",
+            "expected_value": "03/12/2025",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 720, 650, 750],
+            "page_number": 3
+          }
+        ],
+        "tables": [
+          {
+            "table_name": "income_breakdown",
+            "page_number": 2,
+            "bounding_box": [120, 240, 650, 480],
+            "expected_confidence": 0.96,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "income_type", "expected_value": "Gross receipts or sales", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$1,425,000.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "income_type", "expected_value": "Interest", "expected_confidence": 0.99},
+                  {"column_name": "amount", "expected_value": "$12,350.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "income_type", "expected_value": "Capital gain net income", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$21,400.00", "expected_confidence": 0.98}
+                ]
+              }
+            ]
+          },
+          {
+            "table_name": "deductions_breakdown",
+            "page_number": 2,
+            "bounding_box": [120, 520, 650, 760],
+            "expected_confidence": 0.95,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Compensation of officers", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$245,000.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Salaries and wages", "expected_confidence": 0.98},
+                  {"column_name": "amount", "expected_value": "$385,750.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Repairs and maintenance", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$42,680.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 3,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Bad debts", "expected_confidence": 0.98},
+                  {"column_name": "amount", "expected_value": "$18,500.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 4,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Rent", "expected_confidence": 0.99},
+                  {"column_name": "amount", "expected_value": "$120,000.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 5,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Taxes and licenses", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$35,750.00", "expected_confidence": 0.98}
+                ]
+              },
+              {
+                "row_index": 6,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Depreciation", "expected_confidence": 0.98},
+                  {"column_name": "amount", "expected_value": "$87,250.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 7,
+                "cells": [
+                  {"column_name": "deduction_type", "expected_value": "Other deductions", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "$190,500.00", "expected_confidence": 0.98}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "processing_advantages": [
+        "High resolution (400 DPI) ensures clear text recognition for financial figures",
+        "Strong contrast makes table grid lines clearly visible",
+        "Minimal skew ensures perfect alignment of financial figures",
+        "Low compression artifacts preserve fine details in text",
+        "Consistent lighting ensures uniform recognition across all pages"
+      ]
+    },
+    {
+      "file_name": "bank_statement_high_001.pdf",
+      "document_type": "bank_statement",
+      "document_subtype": "business_checking",
+      "page_count": 2,
+      "quality_metrics": {
+        "resolution_dpi": 350,
+        "contrast_ratio": 0.88,
+        "noise_level": 0.02,
+        "blur_sigma": 0.03,
+        "skew_angle_degrees": 0.0,
+        "compression_artifacts": 0.04,
+        "lighting_uniformity": 0.94
+      },
+      "expected_results": {
+        "fields": [
+          {
+            "field_name": "account_holder",
+            "expected_value": "Coastal Supplies Inc.",
+            "expected_confidence": 0.98,
+            "bounding_box": [120, 240, 450, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "account_number",
+            "expected_value": "****3456",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 240, 650, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "statement_period",
+            "expected_value": "04/01/2025 - 04/30/2025",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 310, 350, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "opening_balance",
+            "expected_value": "$38,245.67",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 310, 650, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "closing_balance",
+            "expected_value": "$42,879.23",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 380, 650, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "total_deposits",
+            "expected_value": "$125,450.78",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 450, 650, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "total_withdrawals",
+            "expected_value": "$120,817.22",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 520, 650, 550],
+            "page_number": 1
+          }
+        ],
+        "tables": [
+          {
+            "table_name": "transactions",
+            "page_number": 1,
+            "bounding_box": [120, 590, 650, 760],
+            "expected_confidence": 0.96,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/02/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Deposit", "expected_confidence": 0.99},
+                  {"column_name": "amount", "expected_value": "$15,750.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$53,995.67", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/05/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Check #1042", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "-$8,245.50", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$45,750.17", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/10/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Deposit", "expected_confidence": 0.99},
+                  {"column_name": "amount", "expected_value": "$22,450.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$68,200.17", "expected_confidence": 0.97}
+                ]
+              }
+            ]
+          },
+          {
+            "table_name": "transactions_continued",
+            "page_number": 2,
+            "bounding_box": [120, 240, 650, 480],
+            "expected_confidence": 0.96,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/15/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Withdrawal - Payroll", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "-$32,450.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$35,750.17", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/20/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Deposit", "expected_confidence": 0.99},
+                  {"column_name": "amount", "expected_value": "$28,750.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$64,500.17", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/25/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Withdrawal - Rent", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "-$10,000.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$54,500.17", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 3,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/28/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Withdrawal - Utilities", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "-$3,250.00", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$51,250.17", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 4,
+                "cells": [
+                  {"column_name": "date", "expected_value": "04/30/2025", "expected_confidence": 0.98},
+                  {"column_name": "description", "expected_value": "Withdrawal - Insurance", "expected_confidence": 0.97},
+                  {"column_name": "amount", "expected_value": "-$8,370.94", "expected_confidence": 0.98},
+                  {"column_name": "balance", "expected_value": "$42,879.23", "expected_confidence": 0.97}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "processing_advantages": [
+        "High resolution (350 DPI) ensures clear digit recognition in financial amounts",
+        "Strong contrast between table grid lines and background",
+        "Zero skew ensures perfect alignment of transaction data",
+        "Low noise level provides clean extraction of transaction descriptions",
+        "Consistent lighting ensures uniform recognition across both pages"
+      ]
+    },
+    {
+      "file_name": "pay_stub_high_001.pdf",
+      "document_type": "pay_stub",
+      "document_subtype": "employee",
+      "page_count": 1,
+      "quality_metrics": {
+        "resolution_dpi": 380,
+        "contrast_ratio": 0.91,
+        "noise_level": 0.01,
+        "blur_sigma": 0.02,
+        "skew_angle_degrees": 0.0,
+        "compression_artifacts": 0.03,
+        "lighting_uniformity": 0.97
+      },
+      "expected_results": {
+        "fields": [
+          {
+            "field_name": "employer_name",
+            "expected_value": "Coastal Supplies Inc.",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 120, 450, 150],
+            "page_number": 1
+          },
+          {
+            "field_name": "employer_address",
+            "expected_value": "1742 Harbor Way, Suite 100, Portland, OR 97201",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 160, 650, 190],
+            "page_number": 1
+          },
+          {
+            "field_name": "employee_name",
+            "expected_value": "Sarah J. Williams",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 240, 350, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "employee_id",
+            "expected_value": "EMP-10042",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 240, 650, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "pay_period",
+            "expected_value": "04/01/2025 - 04/15/2025",
+            "expected_confidence": 0.98,
+            "bounding_box": [120, 310, 350, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "pay_date",
+            "expected_value": "04/20/2025",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 310, 650, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "gross_pay",
+            "expected_value": "$3,750.00",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 380, 650, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "federal_tax",
+            "expected_value": "$562.50",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 450, 650, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "state_tax",
+            "expected_value": "$187.50",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 520, 650, 550],
+            "page_number": 1
+          },
+          {
+            "field_name": "social_security",
+            "expected_value": "$232.50",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 590, 650, 620],
+            "page_number": 1
+          },
+          {
+            "field_name": "medicare",
+            "expected_value": "$54.38",
+            "expected_confidence": 0.97,
+            "bounding_box": [520, 660, 650, 690],
+            "page_number": 1
+          },
+          {
+            "field_name": "net_pay",
+            "expected_value": "$2,713.12",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 730, 650, 760],
+            "page_number": 1
+          }
+        ],
+        "tables": [
+          {
+            "table_name": "earnings",
+            "page_number": 1,
+            "bounding_box": [120, 380, 450, 550],
+            "expected_confidence": 0.97,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Regular", "expected_confidence": 0.99},
+                  {"column_name": "hours", "expected_value": "80.00", "expected_confidence": 0.98},
+                  {"column_name": "rate", "expected_value": "$45.00", "expected_confidence": 0.98},
+                  {"column_name": "amount", "expected_value": "$3,600.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Overtime", "expected_confidence": 0.98},
+                  {"column_name": "hours", "expected_value": "2.00", "expected_confidence": 0.99},
+                  {"column_name": "rate", "expected_value": "$67.50", "expected_confidence": 0.98},
+                  {"column_name": "amount", "expected_value": "$135.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Bonus", "expected_confidence": 0.99},
+                  {"column_name": "hours", "expected_value": "", "expected_confidence": 0.00},
+                  {"column_name": "rate", "expected_value": "", "expected_confidence": 0.00},
+                  {"column_name": "amount", "expected_value": "$15.00", "expected_confidence": 0.98}
+                ]
+              }
+            ]
+          },
+          {
+            "table_name": "year_to_date",
+            "page_number": 1,
+            "bounding_box": [120, 590, 450, 760],
+            "expected_confidence": 0.96,
+            "rows": [
+              {
+                "row_index": 0,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Gross Pay", "expected_confidence": 0.98},
+                  {"column_name": "ytd_amount", "expected_value": "$30,000.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 1,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Federal Tax", "expected_confidence": 0.98},
+                  {"column_name": "ytd_amount", "expected_value": "$4,500.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 2,
+                "cells": [
+                  {"column_name": "description", "expected_value": "State Tax", "expected_confidence": 0.98},
+                  {"column_name": "ytd_amount", "expected_value": "$1,500.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 3,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Social Security", "expected_confidence": 0.97},
+                  {"column_name": "ytd_amount", "expected_value": "$1,860.00", "expected_confidence": 0.96}
+                ]
+              },
+              {
+                "row_index": 4,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Medicare", "expected_confidence": 0.98},
+                  {"column_name": "ytd_amount", "expected_value": "$435.00", "expected_confidence": 0.97}
+                ]
+              },
+              {
+                "row_index": 5,
+                "cells": [
+                  {"column_name": "description", "expected_value": "Net Pay", "expected_confidence": 0.99},
+                  {"column_name": "ytd_amount", "expected_value": "$21,705.00", "expected_confidence": 0.97}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "processing_advantages": [
+        "High resolution (380 DPI) ensures clear recognition of small text in tables",
+        "Perfect alignment (0.0 degree skew) ensures accurate table extraction",
+        "Excellent contrast makes dollar signs and decimal points clearly visible",
+        "Minimal noise provides clean extraction of numerical values",
+        "Uniform lighting ensures consistent recognition across the entire document"
+      ]
+    },
+    {
+      "file_name": "identity_document_high_001.pdf",
+      "document_type": "identity_document",
+      "document_subtype": "drivers_license",
+      "page_count": 1,
+      "quality_metrics": {
+        "resolution_dpi": 600,
+        "contrast_ratio": 0.95,
+        "noise_level": 0.01,
+        "blur_sigma": 0.01,
+        "skew_angle_degrees": 0.0,
+        "compression_artifacts": 0.01,
+        "lighting_uniformity": 0.98
+      },
+      "expected_results": {
+        "fields": [
+          {
+            "field_name": "document_type",
+            "expected_value": "DRIVER LICENSE",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 120, 350, 150],
+            "page_number": 1
+          },
+          {
+            "field_name": "issuing_state",
+            "expected_value": "OREGON",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 120, 650, 150],
+            "page_number": 1
+          },
+          {
+            "field_name": "license_number",
+            "expected_value": "9876543",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 180, 650, 210],
+            "page_number": 1
+          },
+          {
+            "field_name": "full_name",
+            "expected_value": "THOMPSON, MICHAEL JAMES",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 240, 450, 270],
+            "page_number": 1
+          },
+          {
+            "field_name": "address",
+            "expected_value": "123 RIVERFRONT AVE APT 456 PORTLAND, OR 97201",
+            "expected_confidence": 0.97,
+            "bounding_box": [120, 310, 650, 340],
+            "page_number": 1
+          },
+          {
+            "field_name": "date_of_birth",
+            "expected_value": "05/12/1975",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 380, 250, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "issue_date",
+            "expected_value": "06/15/2023",
+            "expected_confidence": 0.98,
+            "bounding_box": [320, 380, 450, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "expiration_date",
+            "expected_value": "05/12/2031",
+            "expected_confidence": 0.98,
+            "bounding_box": [520, 380, 650, 410],
+            "page_number": 1
+          },
+          {
+            "field_name": "sex",
+            "expected_value": "M",
+            "expected_confidence": 0.99,
+            "bounding_box": [120, 450, 150, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "height",
+            "expected_value": "6-02",
+            "expected_confidence": 0.98,
+            "bounding_box": [320, 450, 380, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "eyes",
+            "expected_value": "BRN",
+            "expected_confidence": 0.99,
+            "bounding_box": [520, 450, 580, 480],
+            "page_number": 1
+          },
+          {
+            "field_name": "signature",
+            "expected_value": "Michael Thompson",
+            "expected_confidence": 0.95,
+            "bounding_box": [120, 520, 350, 550],
+            "page_number": 1
+          }
+        ],
+        "tables": []
+      },
+      "processing_advantages": [
+        "Very high resolution (600 DPI) ensures perfect character recognition",
+        "Excellent contrast makes security features less problematic for OCR",
+        "Perfect alignment (0.0 degree skew) ensures accurate field extraction",
+        "Minimal noise provides clean extraction of ID information",
+        "Uniform lighting ensures consistent recognition across the entire document",
+        "Low compression artifacts preserve fine details in signature"
+      ]
+    }
+  ]
+}

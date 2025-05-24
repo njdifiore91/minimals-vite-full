@@ -1,0 +1,8 @@
+apiVersion: v2
+name: common
+description: Common templates for MCA Application Processing System microservices
+type: library
+version: 0.1.0
+maintainers:
+  - name: Dollar Funding
+    email: devops@dollarfunding.com

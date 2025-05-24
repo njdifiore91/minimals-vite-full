@@ -1,0 +1,791 @@
+{
+  "version": "1.0.0",
+  "description": "Central metadata file for OCR service test documents",
+  "last_updated": "2025-05-23",
+  "document_types": [
+    "loan_application",
+    "tax_return",
+    "bank_statement",
+    "pay_stub",
+    "identity_document",
+    "business_license",
+    "invoice",
+    "utility_bill",
+    "other"
+  ],
+  "text_types": [
+    "typed",
+    "handwritten",
+    "mixed"
+  ],
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.75,
+    "low": 0.5,
+    "automation_threshold": 0.75,
+    "human_review_threshold": 0.75
+  },
+  "typed_documents": {
+    "loan_application_001": {
+      "file_path": "typed_documents/loan_application_001.pdf",
+      "document_type": "loan_application",
+      "text_type": "typed",
+      "page_count": 3,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "business_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "business_address": {
+          "value": "123 Main Street, Suite 100, Anytown, CA 94538",
+          "expected_confidence": 0.95,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 500}
+        },
+        "business_phone": {
+          "value": "(555) 123-4567",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 350}
+        },
+        "business_email": {
+          "value": "info@acmecorp.com",
+          "expected_confidence": 0.96,
+          "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 400}
+        },
+        "tax_id": {
+          "value": "12-3456789",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 350}
+        },
+        "requested_amount": {
+          "value": "250000",
+          "expected_confidence": 0.99,
+          "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 350}
+        },
+        "business_type": {
+          "value": "Corporation",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 330, "left": 200, "bottom": 355, "right": 350}
+        },
+        "years_in_business": {
+          "value": "12",
+          "expected_confidence": 0.99,
+          "position": {"page": 1, "top": 360, "left": 200, "bottom": 385, "right": 250}
+        },
+        "annual_revenue": {
+          "value": "1500000",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 390, "left": 200, "bottom": 415, "right": 350}
+        },
+        "owner_name": {
+          "value": "John Smith",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 350}
+        },
+        "owner_address": {
+          "value": "456 Oak Avenue, Anytown, CA 94538",
+          "expected_confidence": 0.95,
+          "position": {"page": 2, "top": 180, "left": 200, "bottom": 205, "right": 500}
+        },
+        "owner_phone": {
+          "value": "(555) 987-6543",
+          "expected_confidence": 0.96,
+          "position": {"page": 2, "top": 210, "left": 200, "bottom": 235, "right": 350}
+        },
+        "owner_email": {
+          "value": "john.smith@acmecorp.com",
+          "expected_confidence": 0.95,
+          "position": {"page": 2, "top": 240, "left": 200, "bottom": 265, "right": 400}
+        },
+        "owner_ssn": {
+          "value": "123-45-6789",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 270, "left": 200, "bottom": 295, "right": 350}
+        },
+        "signature_date": {
+          "value": "2025-01-15",
+          "expected_confidence": 0.96,
+          "position": {"page": 3, "top": 500, "left": 400, "bottom": 525, "right": 500}
+        }
+      }
+    },
+    "tax_return_001": {
+      "file_path": "typed_documents/tax_return_001.pdf",
+      "document_type": "tax_return",
+      "text_type": "typed",
+      "page_count": 5,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "business_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "tax_year": {
+          "value": "2024",
+          "expected_confidence": 0.99,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 250}
+        },
+        "ein": {
+          "value": "12-3456789",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 350}
+        },
+        "total_income": {
+          "value": "1523450",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 300, "left": 400, "bottom": 325, "right": 500}
+        },
+        "total_deductions": {
+          "value": "876320",
+          "expected_confidence": 0.96,
+          "position": {"page": 3, "top": 400, "left": 400, "bottom": 425, "right": 500}
+        },
+        "net_profit": {
+          "value": "647130",
+          "expected_confidence": 0.97,
+          "position": {"page": 4, "top": 300, "left": 400, "bottom": 325, "right": 500}
+        },
+        "tax_due": {
+          "value": "161782",
+          "expected_confidence": 0.98,
+          "position": {"page": 4, "top": 500, "left": 400, "bottom": 525, "right": 500}
+        },
+        "preparer_name": {
+          "value": "Jane Doe, CPA",
+          "expected_confidence": 0.95,
+          "position": {"page": 5, "top": 400, "left": 200, "bottom": 425, "right": 350}
+        },
+        "preparer_date": {
+          "value": "2025-03-10",
+          "expected_confidence": 0.96,
+          "position": {"page": 5, "top": 450, "left": 200, "bottom": 475, "right": 300}
+        }
+      }
+    },
+    "bank_statement_001": {
+      "file_path": "typed_documents/bank_statement_001.pdf",
+      "document_type": "bank_statement",
+      "text_type": "typed",
+      "page_count": 2,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "account_holder": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "account_number": {
+          "value": "XXXX-XXXX-1234",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 350}
+        },
+        "bank_name": {
+          "value": "First National Bank",
+          "expected_confidence": 0.99,
+          "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 300}
+        },
+        "statement_period": {
+          "value": "01/01/2025 - 01/31/2025",
+          "expected_confidence": 0.96,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 400}
+        },
+        "opening_balance": {
+          "value": "125678.45",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 250, "left": 400, "bottom": 275, "right": 500}
+        },
+        "closing_balance": {
+          "value": "143256.78",
+          "expected_confidence": 0.98,
+          "position": {"page": 2, "top": 500, "left": 400, "bottom": 525, "right": 500}
+        },
+        "total_deposits": {
+          "value": "87654.32",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 400, "left": 400, "bottom": 425, "right": 500}
+        },
+        "total_withdrawals": {
+          "value": "70075.99",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 450, "left": 400, "bottom": 475, "right": 500}
+        }
+      },
+      "expected_tables": [
+        {
+          "name": "transactions",
+          "page": 1,
+          "position": {"top": 300, "left": 50, "bottom": 700, "right": 750},
+          "columns": ["Date", "Description", "Amount", "Balance"],
+          "expected_rows": 15,
+          "expected_confidence": 0.95
+        }
+      ]
+    },
+    "invoice_001": {
+      "file_path": "typed_documents/invoices/invoice_001.pdf",
+      "document_type": "invoice",
+      "text_type": "typed",
+      "page_count": 1,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "invoice_number": {
+          "value": "INV-2025-0123",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 150, "left": 600, "bottom": 175, "right": 700}
+        },
+        "invoice_date": {
+          "value": "2025-02-15",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 180, "left": 600, "bottom": 205, "right": 700}
+        },
+        "due_date": {
+          "value": "2025-03-15",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 210, "left": 600, "bottom": 235, "right": 700}
+        },
+        "vendor_name": {
+          "value": "Supplier Co. Ltd.",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 300}
+        },
+        "vendor_address": {
+          "value": "789 Vendor Street, Suppliertown, CA 94539",
+          "expected_confidence": 0.95,
+          "position": {"page": 1, "top": 130, "left": 100, "bottom": 155, "right": 400}
+        },
+        "customer_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 180, "left": 100, "bottom": 205, "right": 300}
+        },
+        "customer_address": {
+          "value": "123 Main Street, Suite 100, Anytown, CA 94538",
+          "expected_confidence": 0.95,
+          "position": {"page": 1, "top": 210, "left": 100, "bottom": 235, "right": 400}
+        },
+        "subtotal": {
+          "value": "5000.00",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 500, "left": 600, "bottom": 525, "right": 700}
+        },
+        "tax": {
+          "value": "400.00",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 530, "left": 600, "bottom": 555, "right": 700}
+        },
+        "total": {
+          "value": "5400.00",
+          "expected_confidence": 0.99,
+          "position": {"page": 1, "top": 560, "left": 600, "bottom": 585, "right": 700}
+        }
+      },
+      "expected_tables": [
+        {
+          "name": "line_items",
+          "page": 1,
+          "position": {"top": 300, "left": 100, "bottom": 450, "right": 700},
+          "columns": ["Item", "Description", "Quantity", "Unit Price", "Amount"],
+          "expected_rows": 3,
+          "expected_confidence": 0.96
+        }
+      ]
+    },
+    "financial_document_001": {
+      "file_path": "typed_documents/financial_documents/financial_document_001.pdf",
+      "document_type": "other",
+      "text_type": "typed",
+      "page_count": 4,
+      "quality": "medium",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "company_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 300}
+        },
+        "document_title": {
+          "value": "Financial Projections 2025-2027",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 150, "left": 250, "bottom": 175, "right": 550}
+        },
+        "prepared_by": {
+          "value": "Finance Department",
+          "expected_confidence": 0.96,
+          "position": {"page": 1, "top": 200, "left": 100, "bottom": 225, "right": 300}
+        },
+        "prepared_date": {
+          "value": "2025-01-30",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 230, "left": 100, "bottom": 255, "right": 200}
+        }
+      },
+      "expected_tables": [
+        {
+          "name": "revenue_projections",
+          "page": 2,
+          "position": {"top": 200, "left": 100, "bottom": 500, "right": 700},
+          "columns": ["Year", "Q1", "Q2", "Q3", "Q4", "Total"],
+          "expected_rows": 3,
+          "expected_confidence": 0.95
+        },
+        {
+          "name": "expense_projections",
+          "page": 3,
+          "position": {"top": 200, "left": 100, "bottom": 500, "right": 700},
+          "columns": ["Year", "Q1", "Q2", "Q3", "Q4", "Total"],
+          "expected_rows": 3,
+          "expected_confidence": 0.95
+        }
+      ]
+    },
+    "low_quality_document_001": {
+      "file_path": "typed_documents/quality_variations/low_quality_document_001.pdf",
+      "document_type": "other",
+      "text_type": "typed",
+      "page_count": 1,
+      "quality": "low",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "document_title": {
+          "value": "Meeting Minutes",
+          "expected_confidence": 0.85,
+          "position": {"page": 1, "top": 100, "left": 250, "bottom": 125, "right": 450}
+        },
+        "meeting_date": {
+          "value": "2025-02-10",
+          "expected_confidence": 0.82,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 300}
+        },
+        "attendees": {
+          "value": "John Smith, Jane Doe, Robert Johnson, Sarah Williams",
+          "expected_confidence": 0.78,
+          "position": {"page": 1, "top": 200, "left": 200, "bottom": 225, "right": 600}
+        }
+      }
+    }
+  },
+  "handwritten_documents": {
+    "loan_application_notes_001": {
+      "file_path": "handwritten_documents/loan_application_notes_001.pdf",
+      "document_type": "loan_application",
+      "text_type": "handwritten",
+      "page_count": 2,
+      "quality": "medium",
+      "handwriting_style": "cursive",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "applicant_name": {
+          "value": "John Smith",
+          "expected_confidence": 0.85,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "loan_purpose": {
+          "value": "Business expansion and equipment purchase",
+          "expected_confidence": 0.80,
+          "position": {"page": 1, "top": 200, "left": 200, "bottom": 250, "right": 600}
+        },
+        "requested_amount": {
+          "value": "250000",
+          "expected_confidence": 0.87,
+          "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 350}
+        },
+        "business_description": {
+          "value": "Manufacturing company specializing in custom metal fabrication for industrial clients",
+          "expected_confidence": 0.75,
+          "position": {"page": 1, "top": 350, "left": 200, "bottom": 425, "right": 600}
+        },
+        "contact_phone": {
+          "value": "(555) 987-6543",
+          "expected_confidence": 0.83,
+          "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 350}
+        },
+        "signature": {
+          "value": "John Smith",
+          "expected_confidence": 0.78,
+          "position": {"page": 2, "top": 500, "left": 400, "bottom": 550, "right": 600}
+        },
+        "date": {
+          "value": "2/15/2025",
+          "expected_confidence": 0.82,
+          "position": {"page": 2, "top": 500, "left": 200, "bottom": 525, "right": 300}
+        }
+      }
+    },
+    "personal_notes_001": {
+      "file_path": "handwritten_documents/personal_notes_001.pdf",
+      "document_type": "other",
+      "text_type": "handwritten",
+      "page_count": 1,
+      "quality": "medium",
+      "handwriting_style": "print",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "note_title": {
+          "value": "Meeting with First National Bank",
+          "expected_confidence": 0.83,
+          "position": {"page": 1, "top": 100, "left": 200, "bottom": 125, "right": 500}
+        },
+        "date": {
+          "value": "3/10/2025",
+          "expected_confidence": 0.85,
+          "position": {"page": 1, "top": 130, "left": 200, "bottom": 155, "right": 300}
+        },
+        "contact_name": {
+          "value": "Sarah Johnson",
+          "expected_confidence": 0.84,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 400}
+        },
+        "contact_title": {
+          "value": "Loan Officer",
+          "expected_confidence": 0.82,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 350}
+        },
+        "notes_content": {
+          "value": "Discussed loan terms. Need to provide additional financial statements. Follow up next week.",
+          "expected_confidence": 0.75,
+          "position": {"page": 1, "top": 250, "left": 200, "bottom": 350, "right": 600}
+        }
+      }
+    },
+    "signature_page_001": {
+      "file_path": "handwritten_documents/signature_page_001.pdf",
+      "document_type": "other",
+      "text_type": "handwritten",
+      "page_count": 1,
+      "quality": "high",
+      "handwriting_style": "signature",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "signature_name": {
+          "value": "John Smith",
+          "expected_confidence": 0.75,
+          "position": {"page": 1, "top": 400, "left": 300, "bottom": 450, "right": 500}
+        },
+        "signature_title": {
+          "value": "CEO",
+          "expected_confidence": 0.80,
+          "position": {"page": 1, "top": 460, "left": 300, "bottom": 485, "right": 350}
+        },
+        "signature_date": {
+          "value": "3/15/2025",
+          "expected_confidence": 0.82,
+          "position": {"page": 1, "top": 400, "left": 600, "bottom": 425, "right": 700}
+        }
+      }
+    },
+    "difficult_handwriting_001": {
+      "file_path": "handwritten_documents/difficult_handwriting_001.pdf",
+      "document_type": "other",
+      "text_type": "handwritten",
+      "page_count": 1,
+      "quality": "low",
+      "handwriting_style": "cursive_difficult",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_fields": {
+        "note_content": {
+          "value": "Please review the attached financial statements and provide feedback by Friday",
+          "expected_confidence": 0.65,
+          "position": {"page": 1, "top": 200, "left": 100, "bottom": 300, "right": 600}
+        },
+        "author_name": {
+          "value": "Robert Johnson",
+          "expected_confidence": 0.70,
+          "position": {"page": 1, "top": 350, "left": 400, "bottom": 375, "right": 600}
+        }
+      }
+    }
+  },
+  "mixed_documents": {
+    "loan_application_filled_001": {
+      "file_path": "mixed_documents/loan_application_filled_001.pdf",
+      "document_type": "loan_application",
+      "text_type": "mixed",
+      "page_count": 3,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "typed_fields": {
+        "form_title": {
+          "value": "Business Loan Application",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 100, "left": 250, "bottom": 125, "right": 550}
+        },
+        "form_id": {
+          "value": "BLA-2025-0123",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 130, "left": 600, "bottom": 155, "right": 700}
+        },
+        "field_labels": {
+          "value": "Business Name, Business Address, Business Phone, Tax ID, Requested Amount, Years in Business",
+          "expected_confidence": 0.96,
+          "position": {"page": 1, "top": 200, "left": 100, "bottom": 400, "right": 200}
+        }
+      },
+      "handwritten_fields": {
+        "business_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.85,
+          "position": {"page": 1, "top": 200, "left": 300, "bottom": 225, "right": 600}
+        },
+        "business_address": {
+          "value": "123 Main Street, Suite 100, Anytown, CA 94538",
+          "expected_confidence": 0.82,
+          "position": {"page": 1, "top": 230, "left": 300, "bottom": 255, "right": 700}
+        },
+        "business_phone": {
+          "value": "(555) 123-4567",
+          "expected_confidence": 0.87,
+          "position": {"page": 1, "top": 260, "left": 300, "bottom": 285, "right": 450}
+        },
+        "tax_id": {
+          "value": "12-3456789",
+          "expected_confidence": 0.88,
+          "position": {"page": 1, "top": 290, "left": 300, "bottom": 315, "right": 450}
+        },
+        "requested_amount": {
+          "value": "250000",
+          "expected_confidence": 0.89,
+          "position": {"page": 1, "top": 320, "left": 300, "bottom": 345, "right": 450}
+        },
+        "years_in_business": {
+          "value": "12",
+          "expected_confidence": 0.90,
+          "position": {"page": 1, "top": 350, "left": 300, "bottom": 375, "right": 350}
+        },
+        "signature": {
+          "value": "John Smith",
+          "expected_confidence": 0.78,
+          "position": {"page": 3, "top": 500, "left": 300, "bottom": 550, "right": 500}
+        },
+        "signature_date": {
+          "value": "2/15/2025",
+          "expected_confidence": 0.83,
+          "position": {"page": 3, "top": 500, "left": 600, "bottom": 525, "right": 700}
+        }
+      }
+    },
+    "annotated_bank_statement_001": {
+      "file_path": "mixed_documents/annotated_bank_statement_001.pdf",
+      "document_type": "bank_statement",
+      "text_type": "mixed",
+      "page_count": 2,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "typed_fields": {
+        "bank_name": {
+          "value": "First National Bank",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 300}
+        },
+        "account_holder": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "account_number": {
+          "value": "XXXX-XXXX-1234",
+          "expected_confidence": 0.96,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 350}
+        },
+        "statement_period": {
+          "value": "01/01/2025 - 01/31/2025",
+          "expected_confidence": 0.95,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 400}
+        },
+        "opening_balance": {
+          "value": "125678.45",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 250, "left": 400, "bottom": 275, "right": 500}
+        },
+        "closing_balance": {
+          "value": "143256.78",
+          "expected_confidence": 0.97,
+          "position": {"page": 2, "top": 500, "left": 400, "bottom": 525, "right": 500}
+        }
+      },
+      "handwritten_fields": {
+        "note_1": {
+          "value": "Large deposit from new client",
+          "expected_confidence": 0.80,
+          "position": {"page": 1, "top": 350, "left": 500, "bottom": 375, "right": 700}
+        },
+        "note_2": {
+          "value": "Equipment purchase",
+          "expected_confidence": 0.82,
+          "position": {"page": 1, "top": 400, "left": 500, "bottom": 425, "right": 650}
+        },
+        "note_3": {
+          "value": "Verify this transaction",
+          "expected_confidence": 0.81,
+          "position": {"page": 2, "top": 300, "left": 500, "bottom": 325, "right": 700}
+        },
+        "reviewer_initials": {
+          "value": "JS",
+          "expected_confidence": 0.85,
+          "position": {"page": 2, "top": 550, "left": 650, "bottom": 575, "right": 700}
+        }
+      },
+      "expected_tables": [
+        {
+          "name": "transactions",
+          "page": 1,
+          "position": {"top": 300, "left": 50, "bottom": 700, "right": 750},
+          "columns": ["Date", "Description", "Amount", "Balance"],
+          "expected_rows": 15,
+          "expected_confidence": 0.94
+        }
+      ]
+    },
+    "tax_return_with_notes_001": {
+      "file_path": "mixed_documents/tax_return_with_notes_001.pdf",
+      "document_type": "tax_return",
+      "text_type": "mixed",
+      "page_count": 5,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "typed_fields": {
+        "business_name": {
+          "value": "Acme Corporation",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400}
+        },
+        "tax_year": {
+          "value": "2024",
+          "expected_confidence": 0.98,
+          "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 250}
+        },
+        "ein": {
+          "value": "12-3456789",
+          "expected_confidence": 0.97,
+          "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 350}
+        },
+        "total_income": {
+          "value": "1523450",
+          "expected_confidence": 0.96,
+          "position": {"page": 2, "top": 300, "left": 400, "bottom": 325, "right": 500}
+        },
+        "total_deductions": {
+          "value": "876320",
+          "expected_confidence": 0.95,
+          "position": {"page": 3, "top": 400, "left": 400, "bottom": 425, "right": 500}
+        },
+        "net_profit": {
+          "value": "647130",
+          "expected_confidence": 0.96,
+          "position": {"page": 4, "top": 300, "left": 400, "bottom": 325, "right": 500}
+        }
+      },
+      "handwritten_fields": {
+        "note_1": {
+          "value": "Check depreciation calculation",
+          "expected_confidence": 0.80,
+          "position": {"page": 2, "top": 350, "left": 500, "bottom": 375, "right": 700}
+        },
+        "note_2": {
+          "value": "Verify business expense receipts",
+          "expected_confidence": 0.78,
+          "position": {"page": 3, "top": 450, "left": 500, "bottom": 475, "right": 700}
+        },
+        "note_3": {
+          "value": "Discuss tax planning for next year",
+          "expected_confidence": 0.79,
+          "position": {"page": 5, "top": 300, "left": 100, "bottom": 325, "right": 400}
+        },
+        "reviewer_initials": {
+          "value": "JD",
+          "expected_confidence": 0.85,
+          "position": {"page": 5, "top": 550, "left": 650, "bottom": 575, "right": 700}
+        }
+      }
+    }
+  },
+  "tables": {
+    "financial_table_001": {
+      "file_path": "tables/financial_table_001.pdf",
+      "document_type": "other",
+      "text_type": "typed",
+      "page_count": 1,
+      "quality": "high",
+      "orientation": "landscape",
+      "language": "en-US",
+      "expected_tables": [
+        {
+          "name": "quarterly_financials",
+          "page": 1,
+          "position": {"top": 200, "left": 100, "bottom": 600, "right": 900},
+          "columns": ["Metric", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025", "Total 2025"],
+          "expected_rows": 10,
+          "expected_confidence": 0.95,
+          "sample_data": [
+            ["Revenue", "375000", "412500", "450000", "487500", "1725000"],
+            ["Cost of Goods Sold", "225000", "247500", "270000", "292500", "1035000"],
+            ["Gross Profit", "150000", "165000", "180000", "195000", "690000"]
+          ]
+        }
+      ]
+    },
+    "complex_table_001": {
+      "file_path": "tables/complex_table_001.pdf",
+      "document_type": "other",
+      "text_type": "typed",
+      "page_count": 1,
+      "quality": "high",
+      "orientation": "landscape",
+      "language": "en-US",
+      "expected_tables": [
+        {
+          "name": "complex_financial_data",
+          "page": 1,
+          "position": {"top": 150, "left": 50, "bottom": 700, "right": 950},
+          "columns": ["Category", "Subcategory", "Jan", "Feb", "Mar", "Q1 Total", "Apr", "May", "Jun", "Q2 Total", "H1 Total"],
+          "expected_rows": 15,
+          "expected_confidence": 0.93,
+          "has_merged_cells": true,
+          "has_nested_headers": true
+        }
+      ]
+    },
+    "multi_page_table_001": {
+      "file_path": "tables/multi_page_table_001.pdf",
+      "document_type": "other",
+      "text_type": "typed",
+      "page_count": 3,
+      "quality": "high",
+      "orientation": "portrait",
+      "language": "en-US",
+      "expected_tables": [
+        {
+          "name": "inventory_list",
+          "spans_multiple_pages": true,
+          "page_ranges": [1, 3],
+          "positions": [
+            {"page": 1, "top": 200, "left": 100, "bottom": 700, "right": 700},
+            {"page": 2, "top": 100, "left": 100, "bottom": 700, "right": 700},
+            {"page": 3, "top": 100, "left": 100, "bottom": 500, "right": 700}
+          ],
+          "columns": ["Item ID", "Description", "Quantity", "Unit Price", "Total Value"],
+          "expected_rows": 75,
+          "expected_confidence": 0.94
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,282 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "api-gateway.fullname" . }}
+  labels:
+    {{- include "api-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/part-of: mca-system
+  annotations:
+    {{- with .Values.deployment.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8100"
+    prometheus.io/path: "/metrics"
+    kubernetes.io/description: "Kong API Gateway for MCA Application Processing System"
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "api-gateway.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- toYaml .Values.deployment.strategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "api-gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # Add checksum annotations to trigger pod restart when configs change
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "api-gateway.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        # Default security context if not provided in values
+        {{- if not .Values.podSecurityContext }}
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        {{- end }}
+      # Add init containers if needed
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- toYaml .Values.initContainers | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+            # Default container security context if not provided in values
+            {{- if not .Values.securityContext }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            {{- end }}
+          # Kong API Gateway version 3.5.0 as specified in technical spec
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "3.5.0" }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # Core Kong configuration
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: "/kong/config/kong.yaml"
+            - name: KONG_PROXY_ACCESS_LOG
+              value: "/dev/stdout"
+            - name: KONG_ADMIN_ACCESS_LOG
+              value: "/dev/stdout"
+            - name: KONG_PROXY_ERROR_LOG
+              value: "/dev/stderr"
+            - name: KONG_ADMIN_ERROR_LOG
+              value: "/dev/stderr"
+            - name: KONG_ADMIN_LISTEN
+              value: "127.0.0.1:8001, 127.0.0.1:8444 ssl"
+            - name: KONG_PLUGINS
+              value: "bundled,jwt,rate-limiting,cors,prometheus"
+            - name: KONG_LOG_LEVEL
+              value: "{{ .Values.logLevel | default "notice" }}"
+            - name: KONG_NGINX_WORKER_PROCESSES
+              value: "{{ .Values.nginx.workerProcesses | default "auto" }}"
+            - name: KONG_PROXY_LISTEN
+              value: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+            - name: KONG_STATUS_LISTEN
+              value: "0.0.0.0:8100"
+            - name: KONG_NGINX_HTTP_RESOLVER
+              value: "kube-dns.kube-system.svc.cluster.local"
+            # JWT Authentication configuration with RS256 algorithm
+            # Token expiry: 60 minutes, Refresh token: 7 days as per technical spec
+            - name: KONG_JWT_ALGORITHM
+              value: "RS256"
+            - name: KONG_JWT_KEY_CLAIM_NAME
+              value: "kid"
+            - name: KONG_JWT_ACCESS_TOKEN_TTL
+              value: "3600"  # 60 minutes in seconds
+            - name: KONG_JWT_REFRESH_TOKEN_TTL
+              value: "604800"  # 7 days in seconds
+            # Redis configuration for rate limiting and distributed caching
+            - name: KONG_REDIS_HOST
+              value: {{ .Values.redis.host | default "redis" | quote }}
+            - name: KONG_REDIS_PORT
+              value: {{ .Values.redis.port | default "6379" | quote }}
+            - name: KONG_REDIS_TIMEOUT
+              value: {{ .Values.redis.timeout | default "2000" | quote }}
+            - name: KONG_REDIS_DATABASE
+              value: {{ .Values.redis.database | default "0" | quote }}
+            {{- if .Values.redis.password }}
+            - name: KONG_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "api-gateway.fullname" . }}
+                  key: redis-password
+            {{- end }}
+            # Rate limiting plugin configuration
+            - name: KONG_RATE_LIMITING_REDIS_HOST
+              value: {{ .Values.redis.host | default "redis" | quote }}
+            - name: KONG_RATE_LIMITING_REDIS_PORT
+              value: {{ .Values.redis.port | default "6379" | quote }}
+            - name: KONG_RATE_LIMITING_REDIS_TIMEOUT
+              value: {{ .Values.redis.timeout | default "2000" | quote }}
+            - name: KONG_RATE_LIMITING_REDIS_DATABASE
+              value: {{ .Values.redis.database | default "0" | quote }}
+            {{- if .Values.redis.password }}
+            - name: KONG_RATE_LIMITING_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "api-gateway.fullname" . }}
+                  key: redis-password
+            {{- end }}
+            # Add additional environment variables from values
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            # Add environment variables from secret
+            {{- range $key, $value := .Values.envFromSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "api-gateway.fullname" . }}
+                  key: {{ $value }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: admin
+              containerPort: 8001
+              protocol: TCP
+            - name: admin-ssl
+              containerPort: 8444
+              protocol: TCP
+            - name: metrics
+              containerPort: 8100
+              protocol: TCP
+          # Health probes for monitoring Kong API Gateway status
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: 8000
+              scheme: HTTP
+              httpHeaders:
+                - name: Accept
+                  value: application/json
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 8000
+              scheme: HTTP
+              httpHeaders:
+                - name: Accept
+                  value: application/json
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /status
+              port: 8000
+              scheme: HTTP
+              httpHeaders:
+                - name: Accept
+                  value: application/json
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 30
+          # Resource limits and requests for production-grade deployment
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- if not .Values.resources }}
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            {{- end }}
+          # Volume mounts for configuration and JWT keys
+          volumeMounts:
+            - name: kong-config
+              mountPath: /kong/config
+              readOnly: true
+            - name: jwt-keys
+              mountPath: /kong/jwt
+              readOnly: true
+            - name: tmp-dir
+              mountPath: /tmp
+            {{- if .Values.plugins.enabled }}
+            - name: custom-plugins
+              mountPath: /opt/kong/plugins
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Volumes for configuration, JWT keys, and custom plugins
+      volumes:
+        - name: kong-config
+          configMap:
+            name: {{ include "api-gateway.fullname" . }}
+            defaultMode: 0444
+        - name: jwt-keys
+          secret:
+            secretName: {{ include "api-gateway.fullname" . }}-jwt
+            defaultMode: 0400
+            items:
+              - key: public-key
+                path: public.pem
+              - key: private-key
+                path: private.pem
+        - name: tmp-dir
+          emptyDir: {}
+        {{- if .Values.plugins.enabled }}
+        - name: custom-plugins
+          configMap:
+            name: {{ include "api-gateway.fullname" . }}-plugins
+            defaultMode: 0444
+        {{- end }}
+        {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

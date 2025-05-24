@@ -1,0 +1,57 @@
+# RBAC resources for RabbitMQ pods to interact with the Kubernetes API
+# These resources grant the RabbitMQ pods the necessary permissions to discover other pods
+# in the cluster for node clustering, following the principle of least privilege.
+
+{{- if .Values.rbac.create -}}
+---
+# ServiceAccount for RabbitMQ pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rabbitmq.serviceAccountName" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
+  annotations:
+    # Security scanning annotation
+    security.kubernetes.io/critical-pod: "true"
+    {{- with .Values.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+# Role with permissions to get, list, and watch endpoints
+# These are the minimum permissions needed for RabbitMQ clustering
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
+rules:
+  # Allow RabbitMQ pods to discover other pods for clustering
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Allow RabbitMQ pods to get pod information for clustering
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+# RoleBinding to bind the Role to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rabbitmq.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rabbitmq.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}

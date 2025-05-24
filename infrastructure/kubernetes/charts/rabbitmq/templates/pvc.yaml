@@ -1,0 +1,107 @@
+{{- /*
+PersistentVolumeClaim template for RabbitMQ StatefulSet
+
+This template creates a PersistentVolumeClaim that will be used by the RabbitMQ StatefulSet
+to provide durable storage for messages and node data. Each RabbitMQ pod will have its own
+persistent storage that survives pod restarts, ensuring message durability and cluster stability.
+
+The PVC uses SSD storage for optimal performance and has sufficient capacity for the expected
+message volume as specified in the values.yaml file.
+*/}}
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+  {{- if .Values.persistence.annotations }}
+  annotations:
+    {{- toYaml .Values.persistence.annotations | nindent 4 }}
+  {{- end }}
+  {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.persistence.accessModes }}
+    - {{ . | quote }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+  {{- if .Values.persistence.storageClass }}
+  {{- if (eq "-" .Values.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.persistence.selector }}
+  selector:
+    {{- include "common.tplvalues.render" (dict "value" .Values.persistence.selector "context" $) | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+{{- /*
+VolumeClaim templates for the StatefulSet
+
+This template defines the volumeClaimTemplates section that will be used in the StatefulSet.
+Each pod in the StatefulSet will get its own PVC based on this template, providing stable
+storage that persists across pod restarts and rescheduling.
+
+The template uses the same storage class, access modes, and size as defined in the values.yaml.
+*/}}
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+---
+# Template for the StatefulSet volumeClaimTemplates
+# This is not a real resource but will be included in the StatefulSet manifest
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "common.names.fullname" . }}-pvc-template
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+  annotations:
+    "helm.sh/hook": "pre-install,pre-upgrade"
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+    # This ConfigMap is not meant to be deployed, it's just a way to include the PVC template in the StatefulSet
+    # The actual template is referenced in the StatefulSet manifest
+    "helm.sh/resource-policy": "keep"
+data:
+  # This is the template that will be used in the StatefulSet
+  pvc-template.yaml: |
+    - metadata:
+        name: data
+        labels:
+          {{- include "common.labels.standard" . | nindent 10 }}
+          app.kubernetes.io/component: rabbitmq
+        {{- if .Values.persistence.annotations }}
+        annotations:
+          {{- toYaml .Values.persistence.annotations | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+        {{- if .Values.persistence.storageClass }}
+        {{- if (eq "-" .Values.persistence.storageClass) }}
+        storageClassName: ""
+        {{- else }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.persistence.selector }}
+        selector:
+          {{- include "common.tplvalues.render" (dict "value" .Values.persistence.selector "context" $) | nindent 10 }}
+        {{- end }}
+{{- end }}

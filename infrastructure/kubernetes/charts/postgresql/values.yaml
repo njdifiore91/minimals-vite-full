@@ -1,0 +1,391 @@
+# PostgreSQL Helm Chart Values for Merchant Cash Advance Application Processing System
+# This file contains the default configuration values for the PostgreSQL deployment
+# Environment-specific overrides can be provided in separate files
+
+# Global settings that apply to all templates
+global:
+  # Environment setting: "production", "staging", or "development"
+  environment: "production"
+  # Preferred region for node affinity (optional)
+  preferredRegion: "us-east-1"
+  # PostgreSQL version
+  postgresVersion: "14"
+  # Application name for labels and selectors
+  applicationName: "mca-application-processing"
+
+# Image configuration
+image:
+  # Official PostgreSQL 14 image
+  repository: postgres
+  # Specific version tag for PostgreSQL 14
+  tag: "14.10"
+  # Pull policy for the image
+  pullPolicy: IfNotPresent
+  # Pull secrets if using private registry
+  pullSecrets: []
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations:
+    # Cloud provider specific annotations for IAM roles
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/mca-postgresql-role"
+  # The name of the service account to use
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 999
+  runAsUser: 999
+  runAsGroup: 999
+  runAsNonRoot: true
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 999
+
+# Service configuration
+service:
+  # Service type (ClusterIP, NodePort, LoadBalancer)
+  type: ClusterIP
+  # Port for PostgreSQL
+  port: 5432
+  # Annotations for the service
+  annotations:
+    # Example cloud provider specific annotations
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+
+# Persistence configuration
+persistence:
+  # Storage class for the persistent volume
+  # Use cloud provider's SSD storage class for better performance
+  storageClass: "gp3"
+  # Access mode for the persistent volume
+  accessMode: ReadWriteOnce
+  # Size of the persistent volume (environment-specific in StatefulSet template)
+  # Production: 100Gi, Staging: 50Gi
+  size: "100Gi"
+  # Annotations for the persistent volume claim
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: "kubernetes.io/aws-ebs"
+
+# PostgreSQL configuration
+postgresql:
+  # Database name
+  database: "mca_application_db"
+  # Username for the database
+  username: "mca_app_user"
+  # Password will be stored in a secret
+  # If not provided, a random password will be generated
+  password: ""
+  # Replication user for replica setup
+  replicationUsername: "replication_user"
+  # Replication password will be stored in a secret
+  # If not provided, a random password will be generated
+  replicationPassword: ""
+  # PostgreSQL configuration parameters
+  parameters:
+    # Connection settings
+    max_connections: 200
+    # Memory settings
+    shared_buffers: "1GB"
+    effective_cache_size: "3GB"
+    work_mem: "64MB"
+    maintenance_work_mem: "256MB"
+    # WAL settings
+    wal_level: "replica"
+    max_wal_senders: 10
+    max_replication_slots: 10
+    wal_keep_size: "1GB"
+    # Performance settings
+    random_page_cost: 1.1
+    effective_io_concurrency: 200
+    # Connection pooling settings (for PgBouncer)
+    pooling:
+      enabled: true
+      maxClientConnections: 500
+      defaultPoolSize: 20
+      minPoolSize: 10
+      maxPoolSize: 50
+      # Connection timeout in seconds
+      connectionTimeout: 30
+    # Partitioning settings for large tables
+    partitioning:
+      enabled: true
+      # Tables to be partitioned
+      tables:
+        - name: "applications"
+          column: "created_at"
+          type: "RANGE"
+          interval: "MONTH"
+        - name: "documents"
+          column: "uploaded_at"
+          type: "RANGE"
+          interval: "MONTH"
+    # Logging settings
+    logging:
+      logMinDurationStatement: 1000
+      logCheckpoints: "on"
+      logConnections: "on"
+      logDisconnections: "on"
+      logLockWaits: "on"
+      logTempFiles: 0
+
+# Backup configuration
+backup:
+  # Enable automated backups
+  enabled: true
+  # Schedule for backups (cron format)
+  schedule: "0 1 * * *"  # Daily at 1:00 AM
+  # Retention period in days
+  retentionDays: 30
+  # S3-compatible storage configuration
+  s3:
+    # Bucket name (environment-specific)
+    bucketName: "mca-database-backups-production"
+    # Region for S3 bucket
+    region: "us-east-1"
+    # Path within bucket
+    path: "postgresql/daily"
+    # Encryption settings
+    encryption: "AES256"
+  # Point-in-time recovery configuration
+  pointInTimeRecovery:
+    enabled: true
+    # RPO (Recovery Point Objective) in minutes
+    rpo: 5
+    # WAL archiving to S3
+    walArchiving:
+      enabled: true
+      # S3 path for WAL archives
+      s3Path: "postgresql/wal"
+
+# Metrics configuration
+metrics:
+  # Enable Prometheus metrics
+  enabled: true
+  # Image for PostgreSQL metrics exporter
+  image:
+    repository: prometheuscommunity/postgres-exporter
+    tag: "v0.12.0"
+    pullPolicy: IfNotPresent
+  # Service configuration for metrics
+  service:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9187"
+  # Username for metrics collection
+  username: "postgres_exporter"
+  # Custom queries for metrics collection
+  customMetrics:
+    pg_replication:
+      query: "SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) as lag"
+      metrics:
+        - lag:
+            usage: "GAUGE"
+            description: "Replication lag in seconds"
+
+# Security configuration
+security:
+  # Enable encryption for sensitive data
+  encryption:
+    # AES-256 encryption for sensitive data
+    aes256:
+      enabled: true
+      # Key rotation period in days
+      keyRotationDays: 90
+    # Field-level encryption for PII
+    fieldLevel:
+      enabled: true
+      # Fields to encrypt
+      fields:
+        - "merchant_details.ein"
+        - "merchant_details.bank_account"
+        - "merchant_details.ssn"
+  # Network policies
+  networkPolicies:
+    enabled: true
+    # Allow connections only from specified namespaces
+    allowedNamespaces:
+      - "data-service"
+      - "api-gateway"
+      - "monitoring"
+
+# Initialization scripts
+initialization:
+  # Enable initialization scripts
+  enabled: true
+  # Scripts to run on database initialization
+  scripts:
+    # Create application schema
+    - name: "01-create-schema.sql"
+      content: |
+        -- Create application schema
+        CREATE SCHEMA IF NOT EXISTS mca;
+        
+        -- Set search path
+        SET search_path TO mca,public;
+        
+        -- Grant permissions to application user
+        GRANT USAGE ON SCHEMA mca TO "${POSTGRES_USER}";
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA mca TO "${POSTGRES_USER}";
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA mca TO "${POSTGRES_USER}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA mca GRANT ALL PRIVILEGES ON TABLES TO "${POSTGRES_USER}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA mca GRANT ALL PRIVILEGES ON SEQUENCES TO "${POSTGRES_USER}";
+    
+    # Create extension for UUID generation
+    - name: "02-create-extensions.sql"
+      content: |
+        -- Create UUID extension
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        
+        -- Create pgcrypto for encryption functions
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    
+    # Create functions for field-level encryption
+    - name: "03-create-encryption-functions.sql"
+      content: |
+        -- Create encryption functions
+        CREATE OR REPLACE FUNCTION mca.encrypt_pii(data text, key text) RETURNS text AS $$
+        BEGIN
+          RETURN encode(pgp_sym_encrypt(data, key), 'base64');
+        END;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
+        
+        CREATE OR REPLACE FUNCTION mca.decrypt_pii(data text, key text) RETURNS text AS $$
+        BEGIN
+          RETURN pgp_sym_decrypt(decode(data, 'base64'), key);
+        END;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+# Resource allocation
+resources:
+  # Resource requests and limits for primary instance
+  primary:
+    requests:
+      # Production values
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+  # Resource requests and limits for replica instances
+  replica:
+    requests:
+      # Production values
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+# Node selector for pod assignment
+nodeSelector: {}
+
+# Tolerations for pod assignment
+tolerations: []
+
+# Affinity for pod assignment
+affinity: {}
+
+# Annotations for pods
+podAnnotations: {}
+
+# Annotations for deployment
+annotations: {}
+
+# Environment-specific overrides
+environmentOverrides:
+  # Staging environment overrides
+  staging:
+    # PostgreSQL configuration parameters
+    postgresql:
+      parameters:
+        # Connection settings
+        max_connections: 100
+        # Memory settings
+        shared_buffers: "512MB"
+        effective_cache_size: "1GB"
+        work_mem: "32MB"
+        maintenance_work_mem: "128MB"
+        # Connection pooling settings
+        pooling:
+          maxClientConnections: 200
+          defaultPoolSize: 10
+          minPoolSize: 5
+          maxPoolSize: 20
+    # Resource allocation
+    resources:
+      primary:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+      replica:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+    # Backup configuration
+    backup:
+      s3:
+        bucketName: "mca-database-backups-staging"
+    # Persistence configuration
+    persistence:
+      size: "50Gi"
+  
+  # Development environment overrides
+  development:
+    # PostgreSQL configuration parameters
+    postgresql:
+      parameters:
+        # Connection settings
+        max_connections: 50
+        # Memory settings
+        shared_buffers: "256MB"
+        effective_cache_size: "512MB"
+        work_mem: "16MB"
+        maintenance_work_mem: "64MB"
+        # Connection pooling settings
+        pooling:
+          maxClientConnections: 100
+          defaultPoolSize: 5
+          minPoolSize: 2
+          maxPoolSize: 10
+    # Resource allocation
+    resources:
+      primary:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+      replica:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "512Mi"
+    # Backup configuration
+    backup:
+      s3:
+        bucketName: "mca-database-backups-development"
+    # Persistence configuration
+    persistence:
+      size: "20Gi"

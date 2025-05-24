@@ -1,0 +1,222 @@
+# Staging Environment Configuration for UI CI/CD Pipeline
+# This file defines the configuration for the UI component's CI/CD pipeline in the staging environment.
+# It includes API endpoints, feature flags, resource allocations, and deployment settings specific to staging.
+
+# API Configuration
+api:
+  gateway_url: https://api-gateway.staging.dollarfunding.com
+  timeout_ms: 30000  # Longer timeout for staging testing
+  retry_attempts: 3  # More retry attempts for staging reliability
+  cache_ttl_minutes: 15  # Shorter cache TTL for staging testing
+
+# Feature Flags (selected features enabled for pre-production validation)
+feature_flags:
+  automated_document_processing: true
+  advanced_ocr_extraction: true
+  webhook_notifications: true
+  real_time_updates: true
+  experimental_features: true  # Enabled in staging for testing
+  beta_features: true  # Enabled in staging for testing
+  debug_tools: true  # Enabled in staging for troubleshooting
+
+# Resource Allocations (moderate for staging environment)
+resources:
+  cpu: 2
+  memory: 4Gi
+  storage: 10Gi
+  replicas: 2  # Fewer replicas than production
+  autoscaling:
+    enabled: true
+    min_replicas: 2
+    max_replicas: 5
+    target_cpu_utilization: 70  # Higher threshold than production
+
+# Deployment Configuration
+deployment:
+  platform: vercel
+  target: dollarfunding-staging.vercel.app
+  build_command: yarn build
+  output_directory: dist
+  node_version: 20.0.0
+  environment_variables:
+    NODE_ENV: staging
+    VITE_SERVER_URL: https://api-gateway.staging.dollarfunding.com
+    VITE_APP_NAME: Dollar Funding MCA (Staging)
+    VITE_APP_VERSION: ${APP_VERSION}
+    VITE_ASSETS_DIR: /assets
+  deployment_protection:
+    enabled: true
+    require_approval: false  # No manual approval required for staging
+    require_integration_tests: true  # Integration tests required as specified
+
+# Authentication Configuration
+authentication:
+  method: jwt
+  jwt:
+    algorithm: RS256  # As specified in technical requirements
+    token_expiry_minutes: 60  # As specified in technical requirements
+    refresh_token_days: 7  # As specified in technical requirements
+    issuer: dollarfunding-auth-staging
+    audience: mca-application-staging
+  session_storage: sessionStorage  # As specified in technical requirements
+  persistent_login: false  # Disabled for security
+
+# Logging Configuration (standard for staging - includes INFO level)
+logging:
+  level: info
+  enabled_levels:
+    - error
+    - warn
+    - info
+  disabled_levels:
+    - debug
+    - trace
+  log_to_console: true  # Enable console logging in staging
+  log_to_service: true
+  service_endpoint: https://logging.staging.dollarfunding.com/api/logs
+
+# Performance Monitoring
+monitoring:
+  enabled: true
+  datadog:
+    api_key: ${DATADOG_API_KEY}
+    app_key: ${DATADOG_APP_KEY}
+    service_name: mca-ui
+    environment: staging
+  metrics:
+    - response_time
+    - error_rate
+    - user_interactions
+    - page_load_time
+    - api_call_duration
+    - feature_flag_usage
+  alerts:
+    - type: error_rate
+      threshold: 0.05  # 5% error rate threshold (higher than production)
+      window_minutes: 5
+    - type: response_time
+      threshold: 2000  # 2000ms response time threshold (higher than production)
+      window_minutes: 5
+    - type: availability
+      threshold: 0.99  # 99% availability (lower than production)
+      window_minutes: 15
+
+# UI Display Configuration
+ui:
+  screen_sizes:
+    desktop:
+      - 1920x1080
+      - 1440x900
+    tablet:
+      - 1024x768
+      - 768x1024
+    mobile:
+      - 375x667
+      - 414x896
+  theme:
+    primary_color: '#0052CC'
+    secondary_color: '#00875A'
+    funding_colors:
+      alpha:
+        primary: '#0052CC'
+        secondary: '#00875A'
+      beta:
+        primary: '#6E44FF'
+        secondary: '#FF5630'
+      gamma:
+        primary: '#006644'
+        secondary: '#DE350B'
+
+# Approval Workflow
+approval:
+  required: false  # Not required for staging
+  approvers_required: 1  # Only one approver for staging if needed
+  timeout_hours: 24
+  auto_expire: true
+  notify_channels:
+    - email:staging-team@dollarfunding.com
+    - slack:#staging-deployments
+
+# Health Checks
+health_checks:
+  enabled: true
+  endpoints:
+    - path: /health
+      expected_status: 200
+      timeout_ms: 5000  # Longer timeout for staging
+    - path: /api/status
+      expected_status: 200
+      timeout_ms: 5000  # Longer timeout for staging
+  interval_seconds: 30  # Less frequent checks in staging
+  failure_threshold: 3  # Higher failure threshold for staging
+  success_threshold: 1  # Lower success threshold for staging
+
+# Rollback Configuration
+rollback:
+  automatic: true  # Automatic rollback in staging
+  on_health_check_failure: true
+  on_error_threshold: 0.10  # 10% error threshold for rollback (higher than production)
+  max_deployment_time_minutes: 15  # Longer deployment time for staging
+  notify_on_rollback: true
+
+# Integration Tests
+integration_tests:
+  required: true  # Required in staging as specified
+  timeout_minutes: 30  # Longer timeout for staging tests
+  test_command: yarn test:integration
+  fail_on_error: true  # Fail on error in staging
+  environments:
+    - staging  # Run tests in staging
+  notify_on_failure: true
+
+# Feature Flag Gradual Rollout
+feature_rollout:
+  enabled: true
+  strategies:
+    - name: percentage_rollout
+      default: true
+    - name: user_targeting
+      enabled: true
+    - name: a_b_testing
+      enabled: true  # A/B testing enabled in staging
+  default_rollout_percentage: 50  # Higher default rollout percentage for staging
+  monitoring_enabled: true
+
+# Security Configuration
+security:
+  content_security_policy: true
+  strict_transport_security: true
+  x_content_type_options: true
+  x_frame_options: DENY
+  referrer_policy: strict-origin-when-cross-origin
+  cors:
+    allowed_origins:
+      - https://dollarfunding-staging.vercel.app
+      - http://localhost:3000  # Allow local development connections
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS  # Additional method for staging
+    allowed_headers:
+      - Content-Type
+      - Authorization
+      - X-Debug-Mode  # Additional header for staging
+    expose_headers:
+      - Content-Length
+      - X-Request-ID
+    max_age_seconds: 86400
+    allow_credentials: true
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 120  # Higher rate limit for staging testing
+    burst: 200  # Higher burst for staging testing
+
+# Compliance and Auditing
+compliance:
+  audit_logging: true
+  user_action_tracking: true
+  sensitive_data_handling: true
+  retention_period_days: 2555  # 7 years retention for financial data
+  data_encryption: true

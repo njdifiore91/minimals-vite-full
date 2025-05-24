@@ -1,0 +1,184 @@
+{{- /*
+Common Ingress template for MCA Application Processing System microservices.
+
+This template creates a Kubernetes Ingress resource for exposing services externally.
+It supports TLS, different ingress controllers, and includes proper routing rules.
+
+Usage:
+- Include this template in your service's templates directory
+- Configure ingress settings in your service's values.yaml file
+
+Example values.yaml configuration:
+
+ingress:
+  enabled: true
+  className: "kong"
+  annotations:
+    konghq.com/protocols: "https"
+  hosts:
+    - host: "api.example.com"
+      paths:
+        - path: "/api/v1/service"
+          pathType: "Prefix"
+  tls:
+    enabled: true
+    secretName: "api-tls-cert"
+  cors:
+    enabled: true
+    origins: "https://app.example.com"
+    methods: "GET, POST, PUT, DELETE, OPTIONS"
+  rateLimit:
+    enabled: true
+    perMinute: 60
+    perHour: 1000
+*/ -}}
+
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "common.fullname" . -}}
+{{- $svcName := .Values.ingress.serviceName | default $fullName -}}
+{{- $svcPort := .Values.ingress.servicePort | default 80 -}}
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    {{- with .Values.ingress.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Standard Kubernetes ingress annotations
+    {{- if .Values.ingress.annotations }}
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- end }}
+    
+    # Security headers for all responses
+    {{- if .Values.ingress.securityHeaders.enabled }}
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; connect-src 'self'";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+    {{- end }}
+    
+    # Kong-specific annotations
+    {{- if eq (.Values.ingress.className | default "") "kong" }}
+    # Enable TLS termination if configured
+    {{- if .Values.ingress.tls.enabled }}
+    konghq.com/protocols: "https"
+    {{- end }}
+    
+    # Preserve client IP
+    konghq.com/preserve-client-ip: "true"
+    
+    # Rate limiting configuration for abuse prevention
+    {{- if .Values.ingress.rateLimit.enabled }}
+    konghq.com/plugins: |
+      - name: rate-limiting
+        config:
+          second: {{ .Values.ingress.rateLimit.perSecond | default 5 }}
+          minute: {{ .Values.ingress.rateLimit.perMinute | default 60 }}
+          hour: {{ .Values.ingress.rateLimit.perHour | default 1000 }}
+          policy: {{ .Values.ingress.rateLimit.policy | default "local" }}
+          fault_tolerant: true
+          hide_client_headers: false
+          {{- if .Values.ingress.rateLimit.redis }}
+          redis_host: {{ .Values.ingress.rateLimit.redis.host | default "redis" }}
+          redis_port: {{ .Values.ingress.rateLimit.redis.port | default 6379 }}
+          redis_password: {{ .Values.ingress.rateLimit.redis.password | default "" }}
+          redis_timeout: {{ .Values.ingress.rateLimit.redis.timeout | default 2000 }}
+          {{- end }}
+    {{- end }}
+    
+    # CORS configuration
+    {{- if .Values.ingress.cors.enabled }}
+    konghq.com/plugins: |
+      - name: cors
+        config:
+          origins: {{ .Values.ingress.cors.origins | default "*" | quote }}
+          methods: {{ .Values.ingress.cors.methods | default "GET, POST, PUT, PATCH, DELETE, OPTIONS" | quote }}
+          headers: {{ .Values.ingress.cors.headers | default "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Auth-Token, Authorization" | quote }}
+          exposed_headers: {{ .Values.ingress.cors.exposedHeaders | default "" | quote }}
+          credentials: {{ .Values.ingress.cors.credentials | default false }}
+          max_age: {{ .Values.ingress.cors.maxAge | default 3600 }}
+    {{- end }}
+    
+    # Path rewrite support
+    {{- if .Values.ingress.rewrite.enabled }}
+    konghq.com/rewrite: "{{ .Values.ingress.rewrite.target }}"
+    {{- end }}
+    
+    # Redirect support
+    {{- if .Values.ingress.redirect.enabled }}
+    konghq.com/https-redirect-status-code: "{{ .Values.ingress.redirect.statusCode | default 301 }}"
+    {{- end }}
+    {{- end }}
+    
+    # NGINX-specific annotations
+    {{- if eq (.Values.ingress.className | default "") "nginx" }}
+    # CORS configuration for NGINX
+    {{- if .Values.ingress.cors.enabled }}
+    nginx.ingress.kubernetes.io/cors-allow-origin: {{ .Values.ingress.cors.origins | default "*" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-methods: {{ .Values.ingress.cors.methods | default "GET, POST, PUT, PATCH, DELETE, OPTIONS" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-headers: {{ .Values.ingress.cors.headers | default "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Auth-Token, Authorization" | quote }}
+    nginx.ingress.kubernetes.io/cors-expose-headers: {{ .Values.ingress.cors.exposedHeaders | default "" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "{{ .Values.ingress.cors.credentials | default "false" }}"
+    nginx.ingress.kubernetes.io/cors-max-age: "{{ .Values.ingress.cors.maxAge | default 3600 }}"
+    {{- end }}
+    
+    # Rate limiting for NGINX
+    {{- if .Values.ingress.rateLimit.enabled }}
+    nginx.ingress.kubernetes.io/rate-limit-rps: "{{ .Values.ingress.rateLimit.perSecond | default 5 }}"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "{{ .Values.ingress.rateLimit.connections | default 10 }}"
+    nginx.ingress.kubernetes.io/rate-limit-burst-multiplier: "{{ .Values.ingress.rateLimit.burstMultiplier | default 5 }}"
+    {{- end }}
+    
+    # Rewrite support for NGINX
+    {{- if .Values.ingress.rewrite.enabled }}
+    nginx.ingress.kubernetes.io/rewrite-target: {{ .Values.ingress.rewrite.target }}
+    {{- end }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $.Values.ingress.serviceName | default $svcName }}
+                port:
+                  number: {{ $.Values.ingress.servicePort | default $svcPort }}
+          {{- end }}
+    {{- end }}
+  
+  # Default backend for handling errors
+  {{- if .Values.ingress.defaultBackend.enabled }}
+  defaultBackend:
+    service:
+      name: {{ .Values.ingress.defaultBackend.serviceName }}
+      port:
+        number: {{ .Values.ingress.defaultBackend.servicePort | default 80 }}
+  {{- end }}
+{{- end }}

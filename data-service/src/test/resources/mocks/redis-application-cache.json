@@ -1,0 +1,346 @@
+{
+  "cache_entries": [
+    {
+      "key": "app:1001",
+      "type": "string",
+      "value": {
+        "id": 1001,
+        "status": "PROCESSING",
+        "review_status": "IN_REVIEW",
+        "metadata": {
+          "source": "email",
+          "priority": "high",
+          "assigned_to": "user123",
+          "confidence_score": 0.95
+        },
+        "created_at": "2025-05-20T10:15:30Z",
+        "updated_at": "2025-05-20T10:30:45Z"
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "app:1002",
+      "type": "string",
+      "value": {
+        "id": 1002,
+        "status": "APPROVED",
+        "review_status": "APPROVED",
+        "metadata": {
+          "source": "email",
+          "priority": "medium",
+          "assigned_to": "user456",
+          "confidence_score": 0.98
+        },
+        "created_at": "2025-05-19T14:22:10Z",
+        "updated_at": "2025-05-20T09:15:22Z"
+      },
+      "ttl": 900,
+      "ttl_remaining": 820
+    },
+    {
+      "key": "app:1003",
+      "type": "string",
+      "value": {
+        "id": 1003,
+        "status": "NEW",
+        "review_status": "NOT_REVIEWED",
+        "metadata": {
+          "source": "email",
+          "priority": "low",
+          "confidence_score": 0.92
+        },
+        "created_at": "2025-05-20T11:05:15Z",
+        "updated_at": "2025-05-20T11:05:15Z"
+      },
+      "ttl": 900,
+      "ttl_remaining": 890
+    },
+    {
+      "key": "list:applications",
+      "type": "string",
+      "value": [1001, 1002, 1003, 1004, 1005],
+      "ttl": 900,
+      "ttl_remaining": 600
+    },
+    {
+      "key": "count:app:",
+      "type": "string",
+      "value": 5,
+      "ttl": 900,
+      "ttl_remaining": 600
+    },
+    {
+      "key": "count:app:status=PROCESSING",
+      "type": "string",
+      "value": 2,
+      "ttl": 900,
+      "ttl_remaining": 650
+    },
+    {
+      "key": "collection:applications:status=APPROVED",
+      "type": "string",
+      "value": [1002, 1005],
+      "ttl": 900,
+      "ttl_remaining": 700
+    },
+    {
+      "key": "collection:applications:status=NEW",
+      "type": "string",
+      "value": [1003],
+      "ttl": 900,
+      "ttl_remaining": 800
+    },
+    {
+      "key": "collection:applications:status=PROCESSING",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:applications:review_status=IN_REVIEW",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:applications:review_status=APPROVED",
+      "type": "string",
+      "value": [1002, 1005],
+      "ttl": 900,
+      "ttl_remaining": 680
+    },
+    {
+      "key": "collection:applications:review_status=NOT_REVIEWED",
+      "type": "string",
+      "value": [1003],
+      "ttl": 900,
+      "ttl_remaining": 830
+    },
+    {
+      "key": "merchant:1001",
+      "type": "hash",
+      "fields": {
+        "id": 1001,
+        "application_id": 1001,
+        "legal_name": "Acme Corporation",
+        "dba_name": "Acme Business Solutions",
+        "ein": "12-3456789",
+        "address": {
+          "street": "123 Main St",
+          "city": "Anytown",
+          "state": "CA",
+          "zip": "90210",
+          "country": "USA"
+        },
+        "industry": "Technology",
+        "revenue": 1250000
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "merchant:1002",
+      "type": "hash",
+      "fields": {
+        "id": 1002,
+        "application_id": 1002,
+        "legal_name": "XYZ Enterprises, Inc.",
+        "dba_name": "XYZ Solutions",
+        "ein": "98-7654321",
+        "address": {
+          "street": "456 Oak Ave",
+          "city": "Somewhere",
+          "state": "NY",
+          "zip": "10001",
+          "country": "USA"
+        },
+        "industry": "Retail",
+        "revenue": 875000
+      },
+      "ttl": 900,
+      "ttl_remaining": 820
+    },
+    {
+      "key": "app:1004",
+      "type": "string",
+      "value": {
+        "id": 1004,
+        "status": "PROCESSING",
+        "review_status": "IN_REVIEW",
+        "metadata": {
+          "source": "email",
+          "priority": "high",
+          "assigned_to": "user789",
+          "confidence_score": 0.91
+        },
+        "created_at": "2025-05-20T09:30:00Z",
+        "updated_at": "2025-05-20T10:45:12Z"
+      },
+      "ttl": 900,
+      "ttl_remaining": 680
+    },
+    {
+      "key": "app:1005",
+      "type": "string",
+      "value": {
+        "id": 1005,
+        "status": "APPROVED",
+        "review_status": "APPROVED",
+        "metadata": {
+          "source": "email",
+          "priority": "medium",
+          "assigned_to": "user456",
+          "confidence_score": 0.97
+        },
+        "created_at": "2025-05-19T13:10:45Z",
+        "updated_at": "2025-05-20T08:22:30Z"
+      },
+      "ttl": 900,
+      "ttl_remaining": 550
+    },
+    {
+      "key": "collection:applications:date_range=2025-05-19T00:00:00Z,2025-05-20T23:59:59Z",
+      "type": "string",
+      "value": [1001, 1002, 1003, 1004, 1005],
+      "ttl": 900,
+      "ttl_remaining": 780
+    },
+    {
+      "key": "collection:applications:assigned_to=user456",
+      "type": "string",
+      "value": [1002, 1005],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:applications:priority=high",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 690
+    },
+    {
+      "key": "doc:2001",
+      "type": "string",
+      "value": {
+        "id": 2001,
+        "application_id": 1001,
+        "type": "BANK_STATEMENT",
+        "storage_path": "mca-documents-production/1001/bank_statement_2025_04.pdf",
+        "classification": "BANK_STATEMENT",
+        "uploaded_at": "2025-05-20T10:15:30Z",
+        "metadata": {
+          "confidence_score": 0.98,
+          "page_count": 5,
+          "file_size": 1024567,
+          "mime_type": "application/pdf",
+          "extracted_data": {
+            "account_number": "XXXX1234",
+            "bank_name": "First National Bank",
+            "statement_period": "04/01/2025 - 04/30/2025",
+            "ending_balance": 45678.90
+          }
+        }
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "doc:2002",
+      "type": "string",
+      "value": {
+        "id": 2002,
+        "application_id": 1001,
+        "type": "TAX_RETURN",
+        "storage_path": "mca-documents-production/1001/tax_return_2024.pdf",
+        "classification": "TAX_RETURN",
+        "uploaded_at": "2025-05-20T10:16:45Z",
+        "metadata": {
+          "confidence_score": 0.95,
+          "page_count": 12,
+          "file_size": 2345678,
+          "mime_type": "application/pdf",
+          "extracted_data": {
+            "tax_year": "2024",
+            "ein": "12-3456789",
+            "total_income": 1250000,
+            "net_profit": 320000
+          }
+        }
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:documents:application_id=1001",
+      "type": "string",
+      "value": [2001, 2002],
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:documents:type=BANK_STATEMENT",
+      "type": "string",
+      "value": [2001, 2003],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:documents:type=TAX_RETURN",
+      "type": "string",
+      "value": [2002, 2004],
+      "ttl": 900,
+      "ttl_remaining": 710
+    },
+    {
+      "key": "metadata:app:1001:processing_history",
+      "type": "string",
+      "value": [
+        {
+          "timestamp": "2025-05-20T10:15:30Z",
+          "status": "NEW",
+          "action": "Application created from email",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:20:15Z",
+          "status": "PROCESSING",
+          "action": "Documents classified",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:25:30Z",
+          "status": "PROCESSING",
+          "action": "OCR extraction completed",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:30:45Z",
+          "status": "PROCESSING",
+          "review_status": "IN_REVIEW",
+          "action": "Assigned to reviewer",
+          "user": "system",
+          "assigned_to": "user123"
+        }
+      ],
+      "ttl": 900,
+      "ttl_remaining": 750
+    }
+  ],
+  "cache_info": {
+    "version": "7.0.12",
+    "total_keys": 24,
+    "memory_used": "1.2MB",
+    "hit_rate": 0.92,
+    "miss_rate": 0.08,
+    "eviction_policy": "volatile-lru",
+    "max_memory": "2GB",
+    "max_memory_policy": "noeviction",
+    "persistence": "AOF",
+    "cluster_enabled": true,
+    "sentinel_enabled": true
+  }
+}

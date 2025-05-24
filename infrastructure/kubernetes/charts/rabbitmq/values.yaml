@@ -1,0 +1,505 @@
+## RabbitMQ Helm Chart Values for MCA Application Processing System
+## This file configures the RabbitMQ cluster for the Merchant Cash Advance application
+
+## Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+## RabbitMQ image configuration
+image:
+  registry: docker.io
+  repository: rabbitmq
+  tag: 3.12.6-management
+  pullPolicy: IfNotPresent
+  ## Set to true if you would like to see extra information on logs
+  debug: false
+
+## TLS certificates configuration
+tls:
+  enabled: true
+  ## Name of the secret that contains the certificates
+  existingSecret: ""
+  ## Certificate filename
+  certFilename: tls.crt
+  ## Certificate Key filename
+  keyFilename: tls.key
+  ## CA Certificate filename
+  caFilename: ca.crt
+  ## Skip TLS verification
+  skipVerify: false
+  ## If you're using your own certificate authority and want to specify the full chain of certificates
+  ## Chain of certificates filename
+  chainFilename: ""
+  ## Password for the certificates
+  password: ""
+
+## Authentication parameters
+auth:
+  username: admin
+  # Password will be auto-generated if not provided
+  password: ""
+  # Erlang cookie to determine whether different nodes are allowed to communicate with each other
+  erlangCookie: ""
+  # Sets the ulimit for open files for the RabbitMQ processes
+  ulimitNofiles: 65536
+
+## RabbitMQ cluster parameters
+clustering:
+  enabled: true
+  ## Set to 3 for high availability as per requirements
+  replicaCount: 3
+  ## Pod management policy
+  ## OrderedReady (default): Pods are created in ascending order (0, 1, 2) and deleted in descending order
+  ## Parallel: All pods are created/deleted in parallel
+  podManagementPolicy: OrderedReady
+  ## RabbitMQ cluster formation settings
+  formation:
+    ## Peer discovery mechanism
+    peerDiscovery: k8s
+    ## Kubernetes peer discovery configuration
+    k8s:
+      ## Address type to use for peer discovery
+      ## Can be one of: hostname, ip
+      addressType: hostname
+      ## Service used for peer discovery
+      service: "${RABBITMQ_K8S_SERVICE_NAME}"
+  ## Force boot of an unexpectedly shut down cluster
+  forceBoot: false
+  ## Partition handling mode
+  ## Can be one of: autoheal, pause_minority, pause_if_all_down, ignore
+  partitionHandling: autoheal
+
+## Persistence parameters
+persistence:
+  ## Enable persistence using Persistent Volume Claims
+  enabled: true
+  ## Persistent Volume Storage Class
+  ## If defined, storageClassName: <storageClass>
+  ## If set to "-", storageClassName: "", which disables dynamic provisioning
+  ## If undefined (the default) or set to null, no storageClassName spec is set, choosing the default provisioner
+  storageClass: ""
+  ## Persistent Volume Access Mode
+  accessModes:
+    - ReadWriteOnce
+  ## Persistent Volume size
+  size: 8Gi
+  ## Use existing Persistent Volume Claim
+  existingClaim: ""
+  ## Mount path for the persistent volume
+  mountPath: /bitnami/rabbitmq/mnesia
+  ## Enable persistence for the /var/lib/rabbitmq/.erlang.cookie file
+  ## If disabled, a new cookie will be generated each time the pod starts
+  persistentErlangCookie: true
+
+## RBAC parameters
+rbac:
+  ## Create and use RBAC resources
+  create: true
+
+## Service account parameters
+serviceAccount:
+  ## Create service account
+  create: true
+  ## Service account name
+  name: ""
+
+## Service parameters
+service:
+  ## Service type
+  type: ClusterIP
+  ## RabbitMQ node port
+  ## ref: https://kubernetes.io/docs/concepts/services-networking/service/#nodeport
+  nodePorts:
+    amqp: ""
+    amqpTls: ""
+    dist: ""
+    manager: ""
+    epmd: ""
+  ## Service ports
+  ports:
+    amqp: 5672
+    amqpTls: 5671
+    dist: 25672
+    manager: 15672
+    epmd: 4369
+  ## Service annotations
+  annotations: {}
+
+## Ingress parameters
+ingress:
+  ## Enable ingress record generation
+  enabled: false
+  ## Ingress path type
+  pathType: ImplementationSpecific
+  ## Ingress annotations
+  annotations: {}
+  ## Ingress hostname
+  hostname: rabbitmq.local
+  ## Ingress path
+  path: /
+  ## TLS configuration
+  tls: false
+
+## Network policies
+## Ref: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+networkPolicy:
+  ## Enable creation of NetworkPolicy resources
+  enabled: true
+  ## The Policy model to apply
+  allowExternal: true
+
+## Resource requests and limits
+resources:
+  ## We usually recommend not to specify default resources and to leave this as a conscious
+  ## choice for the user. This also increases chances charts run on environments with little
+  ## resources, such as Minikube. If you do want to specify resources, uncomment the following
+  ## lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  limits:
+    cpu: 2
+    memory: 2Gi
+  requests:
+    cpu: 1
+    memory: 1Gi
+
+## Pod affinity preset
+## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity
+affinity:
+  ## Node affinity preset
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#node-affinity
+  nodeAffinity: {}
+  ## Pod affinity preset
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity
+  podAffinity: {}
+  ## Pod anti-affinity preset
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity
+  podAntiAffinity:
+    ## Pod anti-affinity preset type
+    ## Can be one of: soft, hard
+    type: soft
+    ## Topology key for pod anti-affinity
+    topologyKey: kubernetes.io/hostname
+
+## Node labels for pod assignment
+## ref: https://kubernetes.io/docs/user-guide/node-selection/
+nodeSelector: {}
+
+## Tolerations for pod assignment
+## ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+tolerations: []
+
+## Pod annotations
+## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+
+## Extra volumes to add to the deployment
+##
+extraVolumes: []
+# - name: rabbitmq-certs
+#   secret:
+#     secretName: rabbitmq-certs
+#     defaultMode: 0400
+
+## Extra volume mounts to add to the container
+##
+extraVolumeMounts: []
+# - name: rabbitmq-certs
+#   mountPath: /etc/rabbitmq/certs/
+#   readOnly: true
+
+## Init containers
+## ref: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+## Add init containers to the RabbitMQ pod
+##
+initContainers: []
+# - name: setup-certs
+#   image: alpine:3.16
+#   command: ['sh', '-c', 'cp /tmp/certs/* /etc/rabbitmq/certs/ && chmod 400 /etc/rabbitmq/certs/*']
+#   volumeMounts:
+#     - name: rabbitmq-certs-tmp
+#       mountPath: /tmp/certs
+#     - name: rabbitmq-certs
+#       mountPath: /etc/rabbitmq/certs
+
+## Pod security context
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+podSecurityContext:
+  enabled: true
+  fsGroup: 1001
+  runAsUser: 1001
+
+## Container security context
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
+containerSecurityContext:
+  enabled: true
+  runAsUser: 1001
+  runAsNonRoot: true
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+## RabbitMQ plugins
+plugins: |
+  [rabbitmq_management,rabbitmq_peer_discovery_k8s,rabbitmq_prometheus,rabbitmq_federation,rabbitmq_shovel].
+
+## RabbitMQ community plugins
+communityPlugins: []
+
+## RabbitMQ extra plugins to download
+extraPlugins: []
+
+## RabbitMQ policies
+## Ref: https://www.rabbitmq.com/parameters.html#policies
+policies: |
+  {
+    "name": "ha-all",
+    "pattern": ".*",
+    "vhost": "/",
+    "definition": {
+      "ha-mode": "all",
+      "ha-sync-mode": "automatic",
+      "ha-sync-batch-size": 5,
+      "queue-mode": "lazy"
+    }
+  }
+
+## RabbitMQ definitions
+## Ref: https://www.rabbitmq.com/definitions.html
+definitions:
+  ## Load definitions using a ConfigMap
+  enabled: true
+  ## ConfigMap with the RabbitMQ definitions
+  ## NOTE: This will override the definitions configured in the extraConfiguration
+  configmap: ""
+  ## Definitions file content
+  file: |
+    {
+      "exchanges": [
+        {
+          "name": "mca.documents",
+          "vhost": "/",
+          "type": "fanout",
+          "durable": true,
+          "auto_delete": false,
+          "internal": false,
+          "arguments": {}
+        }
+      ],
+      "queues": [
+        {
+          "name": "document-processing",
+          "vhost": "/",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-queue-mode": "lazy"
+          }
+        },
+        {
+          "name": "data-extraction",
+          "vhost": "/",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-queue-mode": "lazy"
+          }
+        },
+        {
+          "name": "notification",
+          "vhost": "/",
+          "durable": true,
+          "auto_delete": false,
+          "arguments": {
+            "x-queue-mode": "lazy"
+          }
+        }
+      ],
+      "bindings": [
+        {
+          "source": "mca.documents",
+          "vhost": "/",
+          "destination": "document-processing",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        },
+        {
+          "source": "mca.documents",
+          "vhost": "/",
+          "destination": "data-extraction",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        },
+        {
+          "source": "mca.documents",
+          "vhost": "/",
+          "destination": "notification",
+          "destination_type": "queue",
+          "routing_key": "",
+          "arguments": {}
+        }
+      ]
+    }
+
+## Liveness probe configuration
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/#configure-probes
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 120
+  timeoutSeconds: 20
+  periodSeconds: 30
+  failureThreshold: 6
+  successThreshold: 1
+
+## Readiness probe configuration
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/#configure-probes
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  timeoutSeconds: 20
+  periodSeconds: 30
+  failureThreshold: 3
+  successThreshold: 1
+
+## Startup probe configuration
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/#configure-probes
+startupProbe:
+  enabled: false
+  initialDelaySeconds: 30
+  timeoutSeconds: 20
+  periodSeconds: 30
+  failureThreshold: 6
+  successThreshold: 1
+
+## Prometheus metrics
+## ref: https://docs.bitnami.com/kubernetes/infrastructure/rabbitmq/configuration/configure-metrics/
+metrics:
+  enabled: true
+  plugins: [rabbitmq_prometheus]
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 30s
+    scrapeTimeout: 10s
+    selector:
+      release: prometheus
+    honorLabels: true
+    additionalLabels: {}
+    relabelings: []
+    metricRelabelings: []
+  prometheusRule:
+    enabled: true
+    additionalLabels: {}
+    namespace: monitoring
+    rules:
+      - alert: RabbitMQDown
+        expr: rabbitmq_up{service="rabbitmq"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: RabbitMQ node down
+          description: "RabbitMQ node {{ $labels.instance }} is down"
+      - alert: RabbitMQClusterDown
+        expr: sum(rabbitmq_running) < 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: RabbitMQ cluster down
+          description: "Less than 3 nodes running in RabbitMQ cluster"
+      - alert: RabbitMQMemoryHigh
+        expr: rabbitmq_node_mem_used / rabbitmq_node_mem_limit * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RabbitMQ memory high
+          description: "RabbitMQ memory usage is above 90%"
+      - alert: RabbitMQDiskSpaceLow
+        expr: rabbitmq_node_disk_free / rabbitmq_node_disk_free_limit * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RabbitMQ disk space low
+          description: "RabbitMQ disk space is below 10%"
+      - alert: RabbitMQTooManyConnections
+        expr: rabbitmq_connections > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RabbitMQ too many connections
+          description: "RabbitMQ instance has more than 1000 connections"
+
+## RabbitMQ configuration
+configuration: |-
+  ## Clustering
+  cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+  cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+  cluster_formation.k8s.address_type = hostname
+  cluster_formation.k8s.service_name = ${RABBITMQ_K8S_SERVICE_NAME}
+  cluster_formation.node_cleanup.interval = 10
+  cluster_formation.node_cleanup.only_log_warning = true
+  cluster_partition_handling = autoheal
+  
+  ## Queue mirroring
+  queue_master_locator = min-masters
+  
+  ## Memory and disk thresholds
+  vm_memory_high_watermark.relative = 0.7
+  vm_memory_high_watermark_paging_ratio = 0.8
+  disk_free_limit.relative = 2.0
+  
+  ## TLS configuration
+  ssl_options.versions.1 = tlsv1.3
+  ssl_options.verify = verify_peer
+  ssl_options.fail_if_no_peer_cert = true
+  
+  ## Lazy queues for large messages
+  queue_index_embed_msgs_below = 4096
+  
+  ## TCP settings
+  tcp_listen_options.backlog = 4096
+  tcp_listen_options.nodelay = true
+  
+  ## Logging
+  log.file.level = info
+  log.console = true
+  log.console.level = info
+  
+  ## AMQP protocol settings
+  listeners.tcp.default = 5672
+  listeners.ssl.default = 5671
+  protocol_strict_mode = true
+
+## RabbitMQ advanced configuration
+advancedConfiguration: |-
+  [
+    {rabbit, [
+      {tcp_listeners, [5672]},
+      {ssl_listeners, [5671]},
+      {ssl_options, [
+        {cacertfile, "/etc/rabbitmq/certs/ca.crt"},
+        {certfile, "/etc/rabbitmq/certs/tls.crt"},
+        {keyfile, "/etc/rabbitmq/certs/tls.key"},
+        {versions, ['tlsv1.3']},
+        {verify, verify_peer},
+        {fail_if_no_peer_cert, true}
+      ]}
+    ]},
+    {rabbitmq_management, [
+      {listener, [
+        {port, 15672},
+        {ssl, true},
+        {ssl_opts, [
+          {cacertfile, "/etc/rabbitmq/certs/ca.crt"},
+          {certfile, "/etc/rabbitmq/certs/tls.crt"},
+          {keyfile, "/etc/rabbitmq/certs/tls.key"},
+          {versions, ['tlsv1.3']}
+        ]}
+      ]}
+    ]}
+  ].

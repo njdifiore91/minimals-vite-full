@@ -1,0 +1,86 @@
+---
+# Development Namespace for MCA Application Processing System
+# This namespace isolates development workloads from staging and production
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mca-development
+  labels:
+    environment: development
+    app: mca
+    managed-by: terraform
+    tier: backend
+  annotations:
+    monitoring/enabled: "true"
+    description: "MCA Application Processing System - Development Environment"
+    kubernetes.io/metadata.name: "mca-development"
+---
+# Resource Quota for Development Environment
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mca-development-quota
+  namespace: mca-development
+spec:
+  hard:
+    # CPU limits - more restricted for development environment
+    limits.cpu: "16"
+    requests.cpu: "8"
+    
+    # Memory limits - more restricted for development environment
+    limits.memory: 32Gi
+    requests.memory: 16Gi
+    
+    # Storage limits
+    requests.storage: 100Gi
+    
+    # Pod count limits
+    pods: "50"
+    
+    # Other resource limits
+    services: "25"
+    services.loadbalancers: "5"
+    persistentvolumeclaims: "20"
+    configmaps: "50"
+    secrets: "50"
+---
+# Default Limit Range for Development Environment
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: mca-development-limits
+  namespace: mca-development
+spec:
+  limits:
+  - default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
+---
+# Network Policy to isolate development namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mca-development-isolation
+  namespace: mca-development
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from within the namespace
+  - from:
+    - podSelector: {}
+  # Allow traffic from API gateway namespace if needed
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          environment: development
+          tier: gateway
+  egress:
+  # Allow all outbound traffic (can be restricted further if needed)
+  - {}

@@ -1,0 +1,196 @@
+{{- /*
+networkpolicy.yaml for Notification Service
+
+This NetworkPolicy defines the ingress and egress rules for the Notification Service,
+controlling pod-to-pod communication and external access. It implements the security
+requirements specified in the MCA Application Processing System technical specification,
+including:
+
+- Network isolation between services (section 8.2.1)
+- Namespace segregation (section 8.2.1)
+- Security considerations (section 0.2.6)
+- Network segmentation (section 3.8.3)
+- Webhook delivery security (section 3.8.5)
+
+The policy allows:
+1. Ingress traffic from the API Gateway (Kong) for webhook configuration and management
+2. Ingress traffic from RabbitMQ for message consumption
+3. Egress traffic to external webhook endpoints for notification delivery
+4. Egress traffic to DNS services for name resolution
+5. Egress traffic to Redis for caching and rate limiting
+
+This ensures that the Notification Service can only communicate with the services it
+needs to interact with, following the principle of least privilege and implementing
+a defense-in-depth approach to security.
+*/
+
+{{- if .Values.networkPolicy.enabled | default true }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  annotations:
+    description: "Network policy for Notification Service controlling ingress and egress traffic"
+spec:
+  # Apply this policy to all pods with the notification-service label
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "common.name" . }}
+  
+  # Define both ingress and egress policies
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # Ingress rules - control incoming traffic to the Notification Service
+  ingress:
+    # Allow traffic from API Gateway (Kong)
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+    
+    # Allow traffic from RabbitMQ for message consumption
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+        
+    # Allow traffic from Data Service for direct API calls
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+  
+  # Egress rules - control outgoing traffic from the Notification Service
+  egress:
+    # Allow DNS resolution (required for all services)
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    
+    # Allow traffic to RabbitMQ for message acknowledgment
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: {{ .Values.env.RABBITMQ_PORT | default 5672 }}
+    
+    # Allow traffic to Redis for caching and rate limiting
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: redis
+      ports:
+      - protocol: TCP
+        port: {{ .Values.env.REDIS_PORT | default 6379 }}
+    
+    # Allow traffic to external webhook endpoints
+    # This is required for the Notification Service to deliver webhooks to external systems
+    # as specified in section 3.8.5 (Webhook and Notification Security)
+    - to:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          # Exclude internal cluster IPs
+          except:
+          - 10.0.0.0/8     # Private network range
+          - 172.16.0.0/12  # Private network range
+          - 192.168.0.0/16 # Private network range
+          - 169.254.0.0/16 # Link-local addresses
+          - 127.0.0.0/8    # Localhost
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS (preferred for production)
+      - protocol: TCP
+        port: 80   # HTTP (for development/testing only)
+{{- end }}
+
+{{- /*
+Create a policy to allow health check probes from the Kubernetes control plane
+This is required for liveness and readiness probes to work properly
+*/}}
+{{- if .Values.networkPolicy.enabled | default true }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-allow-health-probes
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  annotations:
+    description: "Allow health check probes from Kubernetes control plane"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "common.name" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow health check probes from the Kubernetes control plane
+    # This is required for liveness and readiness probes to work properly
+    - from:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-proxy
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+{{- end }}
+
+{{- /*
+Create a policy to allow metrics collection for monitoring
+This is required for Prometheus metrics scraping and monitoring
+as specified in section 0.2.5 (Monitoring and Logging Considerations)
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.metrics.enabled | default false }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-allow-metrics
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  annotations:
+    description: "Allow metrics collection for monitoring"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "common.name" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow Prometheus to scrape metrics
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: monitoring
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: prometheus
+      ports:
+      - protocol: TCP
+        port: {{ .Values.metrics.port | default 9090 }}
+{{- end }}

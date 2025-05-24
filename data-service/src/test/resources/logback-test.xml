@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 
+    Logback configuration for test environment
+    This configuration controls log output during test execution with the following features:
+    - Console logging with appropriate levels for testing
+    - Suppression of noisy logs from third-party libraries
+    - Structured log format for easy reading
+    - No file logging during tests to reduce I/O overhead
+-->
+<configuration debug="false">
+    <!-- Console appender for test logs -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!-- Pattern layout for structured test logs -->
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{36}) - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Application-specific logging -->
+    <!-- Enable DEBUG logging for com.dollarfunding.mca package -->
+    <logger name="com.dollarfunding.mca" level="DEBUG" />
+
+    <!-- Suppress logs from third-party libraries -->
+    <logger name="org.springframework" level="WARN" />
+    <logger name="org.hibernate" level="WARN" />
+    <logger name="org.apache" level="WARN" />
+    <logger name="com.zaxxer.hikari" level="WARN" />
+    <logger name="org.flywaydb" level="WARN" />
+    <logger name="org.springframework.amqp" level="WARN" />
+    <logger name="org.springframework.data" level="WARN" />
+    <logger name="org.springframework.web" level="WARN" />
+    <logger name="org.springframework.security" level="WARN" />
+    <logger name="org.springframework.cache" level="WARN" />
+    <logger name="org.springframework.transaction" level="WARN" />
+    <logger name="com.rabbitmq" level="WARN" />
+    <logger name="redis.clients" level="WARN" />
+    <logger name="io.lettuce" level="WARN" />
+
+    <!-- Set root logging level to WARN to reduce noise -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE" />
+    </root>
+
+    <!-- 
+        Log level definitions:
+        - ERROR: Processing failures that require immediate attention
+        - WARN: Potential issues that might need investigation
+        - INFO: Normal operations and application flow (disabled in tests by default)
+        - DEBUG: Detailed troubleshooting information (enabled only for application code)
+    -->
+</configuration>

@@ -1,0 +1,39 @@
+{
+  "jwt_validation": {
+    "algorithm": "RS256",
+    "key_claim_name": "iss",
+    "claims_to_verify": ["exp", "nbf", "iss", "aud"],
+    "token_expiration": 3600,
+    "refresh_token_expiration": 604800,
+    "public_key_path": "/etc/kong/jwt-keys/public.pem",
+    "private_key_path": "/etc/kong/jwt-keys/private.key"
+  },
+  "issuer_validation": {
+    "allowed_issuers": ["dollarfunding.com"],
+    "audience": "mca-application-api"
+  },
+  "rate_limiting": {
+    "authenticated": {
+      "requests_per_minute": 60,
+      "burst": 10
+    },
+    "unauthenticated": {
+      "requests_per_minute": 10,
+      "burst": 5
+    }
+  },
+  "cors": {
+    "allowed_origins": ["https://app.dollarfunding.com", "https://admin.dollarfunding.com"],
+    "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    "allowed_headers": ["Authorization", "Content-Type", "Accept", "Origin", "User-Agent"],
+    "exposed_headers": ["X-Request-ID"],
+    "max_age": 3600,
+    "allow_credentials": true
+  },
+  "plugin_config": {
+    "run_on_preflight": true,
+    "secret_is_base64": false,
+    "anonymous": null,
+    "cookie_names": []
+  }
+}

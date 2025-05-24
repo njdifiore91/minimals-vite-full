@@ -1,0 +1,388 @@
+_format_version: "3.0"
+_transform: true
+
+# Services define the different backend microservices that Kong will proxy to
+services:
+  # Data Service - Core application data management
+  - name: data-service
+    url: http://data-service:8080/api
+    protocol: http
+    host: data-service
+    port: 8080
+    path: /api
+    retries: 5
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    tags:
+      - mca-application
+      - core-service
+
+  # Document Service - Document classification
+  - name: document-service
+    url: http://document-service:5000/api
+    protocol: http
+    host: document-service
+    port: 5000
+    path: /api
+    retries: 5
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    tags:
+      - mca-application
+      - document-processing
+
+  # OCR Service - Data extraction from documents
+  - name: ocr-service
+    url: http://ocr-service:5001/api
+    protocol: http
+    host: ocr-service
+    port: 5001
+    path: /api
+    retries: 5
+    connect_timeout: 60000
+    write_timeout: 120000  # Longer timeout for OCR processing
+    read_timeout: 120000   # Longer timeout for OCR processing
+    tags:
+      - mca-application
+      - document-processing
+
+  # Notification Service - Webhooks and alerts
+  - name: notification-service
+    url: http://notification-service:3000/api
+    protocol: http
+    host: notification-service
+    port: 3000
+    path: /api
+    retries: 5
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    tags:
+      - mca-application
+      - notification
+
+# Routes define how requests are sent to services based on hosts, paths, and methods
+routes:
+  # Application management routes
+  - name: applications-route
+    service: data-service
+    protocols: [http, https]
+    paths: ["/api/v1/applications"]
+    strip_path: false
+    preserve_host: false
+    tags:
+      - mca-application
+      - authenticated
+
+  # Document operations routes
+  - name: documents-route
+    service: document-service
+    protocols: [http, https]
+    paths: ["/api/v1/documents"]
+    strip_path: false
+    preserve_host: false
+    tags:
+      - mca-application
+      - authenticated
+
+  # OCR processing routes
+  - name: ocr-route
+    service: ocr-service
+    protocols: [http, https]
+    paths: ["/api/v1/ocr"]
+    strip_path: false
+    preserve_host: false
+    tags:
+      - mca-application
+      - authenticated
+
+  # Webhook configuration routes
+  - name: webhooks-route
+    service: notification-service
+    protocols: [http, https]
+    paths: ["/api/v1/webhooks"]
+    strip_path: false
+    preserve_host: false
+    tags:
+      - mca-application
+      - authenticated
+      - admin-only
+
+# Consumers define the clients that can access the API
+consumers:
+  # System admin consumer with full access
+  - username: system-admin
+    custom_id: system-admin-id
+    tags:
+      - admin
+
+  # Operations staff consumer with limited access
+  - username: operations-staff
+    custom_id: operations-staff-id
+    tags:
+      - operations
+
+  # Frontend application consumer
+  - username: frontend-client
+    custom_id: frontend-client-id
+    tags:
+      - frontend
+
+# Plugins define the functionality and behavior of Kong
+plugins:
+  # Global CORS configuration
+  - name: cors
+    config:
+      origins:
+        - https://app.dollarfunding.com
+        - https://staging.dollarfunding.com
+        - http://localhost:3000
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Version
+        - Content-Length
+        - Content-MD5
+        - Content-Type
+        - Date
+        - Authorization
+        - X-Auth-Token
+        - X-Correlation-ID
+      exposed_headers:
+        - X-Auth-Token
+        - X-Correlation-ID
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+    tags:
+      - global
+
+  # JWT authentication plugin
+  - name: jwt
+    config:
+      key_claim_name: kid
+      claims_to_verify:
+        - exp
+        - nbf
+      secret_is_base64: false
+      run_on_preflight: false
+      maximum_expiration: 7200  # 2 hours maximum token lifetime
+      header_names:
+        - Authorization
+      uri_param_names:
+        - jwt
+    tags:
+      - authentication
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+
+  # Rate limiting plugin for authenticated users
+  - name: rate-limiting
+    config:
+      minute: 60  # 60 requests per minute
+      hour: 3000  # 3000 requests per hour
+      policy: redis
+      redis_host: redis
+      redis_port: 6379
+      redis_timeout: 2000
+      redis_database: 0
+      fault_tolerant: true
+      hide_client_headers: false
+    tags:
+      - rate-limiting
+      - authenticated
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+    consumer_group: authenticated-users
+
+  # Rate limiting plugin for unauthenticated users (more restrictive)
+  - name: rate-limiting
+    config:
+      minute: 10  # 10 requests per minute
+      hour: 500   # 500 requests per hour
+      policy: redis
+      redis_host: redis
+      redis_port: 6379
+      redis_timeout: 2000
+      redis_database: 0
+      fault_tolerant: true
+      hide_client_headers: false
+    tags:
+      - rate-limiting
+      - unauthenticated
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+    anonymous: true
+
+  # IP restriction for admin endpoints
+  - name: ip-restriction
+    config:
+      allow:
+        - 10.0.0.0/8     # Internal network
+        - 172.16.0.0/12  # Docker network
+        - 192.168.0.0/16 # Private network
+      status: 403
+      message: "Access denied: your IP address is not allowed"
+    tags:
+      - security
+      - admin-protection
+    routes:
+      - webhooks-route
+
+  # Request transformation plugin for security headers
+  - name: request-transformer
+    config:
+      remove:
+        headers:
+          - X-Forwarded-For
+          - X-Forwarded-Host
+          - X-Forwarded-Path
+          - X-Forwarded-Prefix
+      add:
+        headers:
+          - X-Content-Type-Options:nosniff
+          - X-XSS-Protection:1; mode=block
+          - X-Frame-Options:DENY
+          - Strict-Transport-Security:max-age=31536000; includeSubDomains
+    tags:
+      - security
+      - request-transformation
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+
+  # Response transformation plugin for consistent output formats
+  - name: response-transformer
+    config:
+      add:
+        headers:
+          - X-Content-Type-Options:nosniff
+          - X-XSS-Protection:1; mode=block
+          - X-Frame-Options:DENY
+          - Content-Security-Policy:default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+    tags:
+      - security
+      - response-transformation
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+
+  # Correlation ID plugin for distributed tracing
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+    tags:
+      - observability
+      - tracing
+    routes:
+      - applications-route
+      - documents-route
+      - ocr-route
+      - webhooks-route
+      
+  # ACL plugin for admin-only routes
+  - name: acl
+    config:
+      allow: [admin]
+      hide_groups_header: true
+    tags:
+      - security
+      - access-control
+    routes:
+      - webhooks-route
+
+# Consumer groups for role-based access control
+consumer_groups:
+  - name: authenticated-users
+    consumers:
+      - system-admin
+      - operations-staff
+      - frontend-client
+
+  - name: admin-users
+    consumers:
+      - system-admin
+
+  - name: operations-users
+    consumers:
+      - operations-staff
+      - system-admin
+
+# JWT credentials for consumers
+jwt_secrets:
+  - consumer: system-admin
+    key: "system-admin-key"
+    algorithm: RS256
+    rsa_public_key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo
+      4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u
+      +qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFczGkPLPgizskuemMghRniWaoLcyeh
+      kd3qqGElvW/VDL5AaWTg0nLVkjRo9z+40RQzuVaE8AkAFmxZzow3x+VJYKdjykkJ
+      0iT9wCS0DRTXu269V264Vf/3jvredZiKRkgwlL9xNAwxXFg0x/XFw005UWVRIkdg
+      cKWTjpBP2dPwVZ4WWC+9aGVd+Gyn1o0CLelf4rEjGoXbAAEgAqeGUxrcIlbjXfbc
+      mwIDAQAB
+      -----END PUBLIC KEY-----
+
+  - consumer: operations-staff
+    key: "operations-staff-key"
+    algorithm: RS256
+    rsa_public_key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo
+      4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u
+      +qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFczGkPLPgizskuemMghRniWaoLcyeh
+      kd3qqGElvW/VDL5AaWTg0nLVkjRo9z+40RQzuVaE8AkAFmxZzow3x+VJYKdjykkJ
+      0iT9wCS0DRTXu269V264Vf/3jvredZiKRkgwlL9xNAwxXFg0x/XFw005UWVRIkdg
+      cKWTjpBP2dPwVZ4WWC+9aGVd+Gyn1o0CLelf4rEjGoXbAAEgAqeGUxrcIlbjXfbc
+      mwIDAQAB
+      -----END PUBLIC KEY-----
+
+  - consumer: frontend-client
+    key: "frontend-client-key"
+    algorithm: RS256
+    rsa_public_key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo
+      4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u
+      +qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFczGkPLPgizskuemMghRniWaoLcyeh
+      kd3qqGElvW/VDL5AaWTg0nLVkjRo9z+40RQzuVaE8AkAFmxZzow3x+VJYKdjykkJ
+      0iT9wCS0DRTXu269V264Vf/3jvredZiKRkgwlL9xNAwxXFg0x/XFw005UWVRIkdg
+      cKWTjpBP2dPwVZ4WWC+9aGVd+Gyn1o0CLelf4rEjGoXbAAEgAqeGUxrcIlbjXfbc
+      mwIDAQAB
+      -----END PUBLIC KEY-----
+
+# ACL plugin for role-based access control
+acls:
+  - consumer: system-admin
+    group: admin
+  - consumer: system-admin
+    group: operations
+  - consumer: operations-staff
+    group: operations
+  - consumer: frontend-client
+    group: frontend
+

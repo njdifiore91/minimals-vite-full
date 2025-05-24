@@ -1,0 +1,249 @@
+# Development Environment Configuration for UI CI/CD Pipeline
+# This file defines the configuration for the UI component's CI/CD pipeline in the development environment.
+# It includes API endpoints, feature flags, resource allocations, and deployment settings specific to development.
+
+# API Configuration
+api:
+  gateway_url: http://api-gateway.dev.dollarfunding.com
+  timeout_ms: 60000  # Longer timeout for development testing
+  retry_attempts: 5  # More retry attempts for development reliability
+  cache_ttl_minutes: 5  # Shorter cache TTL for development testing
+
+# Feature Flags (all enabled for development and testing)
+feature_flags:
+  automated_document_processing: true
+  advanced_ocr_extraction: true
+  webhook_notifications: true
+  real_time_updates: true
+  experimental_features: true
+  beta_features: true
+  debug_tools: true
+  development_tools: true  # Additional development-only tools
+
+# Resource Allocations (minimal for development environment)
+resources:
+  cpu: 1
+  memory: 2Gi
+  storage: 5Gi
+  replicas: 1  # Single replica for development
+  autoscaling:
+    enabled: false  # Disabled for development
+    min_replicas: 1
+    max_replicas: 1
+    target_cpu_utilization: 80  # Higher threshold for development
+
+# Deployment Configuration
+deployment:
+  platform: vercel
+  target: dollarfunding-dev.vercel.app
+  build_command: yarn build
+  output_directory: dist
+  node_version: 20.0.0  # As specified in technical requirements
+  environment_variables:
+    NODE_ENV: development
+    VITE_SERVER_URL: http://api-gateway.dev.dollarfunding.com
+    VITE_APP_NAME: Dollar Funding MCA (Development)
+    VITE_APP_VERSION: ${APP_VERSION}
+    VITE_ASSETS_DIR: /assets
+    VITE_DEBUG_MODE: "true"  # Enable debug mode for development
+  deployment_protection:
+    enabled: false  # No protection needed for development
+    require_approval: false
+    require_integration_tests: false
+
+# Authentication Configuration
+authentication:
+  method: jwt
+  jwt:
+    algorithm: RS256  # As specified in technical requirements
+    token_expiry_minutes: 120  # Extended token expiry for development (2 hours)
+    refresh_token_days: 14  # Extended refresh token for development (2 weeks)
+    issuer: dollarfunding-auth-dev
+    audience: mca-application-dev
+  session_storage: sessionStorage  # As specified in technical requirements
+  persistent_login: true  # Enabled for development convenience
+
+# Logging Configuration (verbose for development - includes all levels)
+logging:
+  level: debug  # Most verbose level for development
+  enabled_levels:
+    - error
+    - warn
+    - info
+    - debug
+    - trace
+  disabled_levels: []  # No disabled levels in development
+  log_to_console: true  # Enable console logging
+  log_to_service: true
+  service_endpoint: http://logging.dev.dollarfunding.com/api/logs
+
+# Performance Monitoring
+monitoring:
+  enabled: true
+  datadog:
+    api_key: ${DATADOG_API_KEY}
+    app_key: ${DATADOG_APP_KEY}
+    service_name: mca-ui
+    environment: development
+  metrics:
+    - response_time
+    - error_rate
+    - user_interactions
+    - page_load_time
+    - api_call_duration
+    - feature_flag_usage
+    - memory_usage  # Additional metric for development
+    - component_render_time  # Additional metric for development
+  alerts:
+    - type: error_rate
+      threshold: 0.10  # 10% error rate threshold (higher than staging)
+      window_minutes: 5
+    - type: response_time
+      threshold: 5000  # 5000ms response time threshold (higher than staging)
+      window_minutes: 5
+
+# UI Display Configuration
+ui:
+  screen_sizes:
+    desktop:
+      - 1920x1080
+      - 1440x900
+    tablet:
+      - 1024x768
+      - 768x1024
+    mobile:
+      - 375x667
+      - 414x896
+  theme:
+    primary_color: '#0052CC'
+    secondary_color: '#00875A'
+    funding_colors:
+      alpha:
+        primary: '#0052CC'
+        secondary: '#00875A'
+      beta:
+        primary: '#6E44FF'
+        secondary: '#FF5630'
+      gamma:
+        primary: '#006644'
+        secondary: '#DE350B'
+
+# Approval Workflow
+approval:
+  required: false  # Not required for development
+  approvers_required: 0
+  timeout_hours: 24
+  auto_expire: true
+  notify_channels:
+    - email:dev-team@dollarfunding.com
+    - slack:#dev-deployments
+
+# Health Checks
+health_checks:
+  enabled: true
+  endpoints:
+    - path: /health
+      expected_status: 200
+      timeout_ms: 10000  # Longer timeout for development
+    - path: /api/status
+      expected_status: 200
+      timeout_ms: 10000  # Longer timeout for development
+  interval_seconds: 60  # Less frequent checks in development
+  failure_threshold: 5  # Higher failure threshold for development
+  success_threshold: 1
+
+# Rollback Configuration
+rollback:
+  automatic: false  # Manual rollback in development
+  on_health_check_failure: false
+  on_error_threshold: 0.25  # 25% error threshold for rollback (higher than staging)
+  max_deployment_time_minutes: 30  # Longer deployment time for development
+  notify_on_rollback: true
+
+# Integration Tests
+integration_tests:
+  required: false  # Not required in development
+  timeout_minutes: 60  # Longer timeout for development tests
+  test_command: yarn test:integration
+  fail_on_error: false  # Don't fail on error in development
+  environments:
+    - development
+  notify_on_failure: true
+
+# Feature Flag Gradual Rollout
+feature_rollout:
+  enabled: true
+  strategies:
+    - name: percentage_rollout
+      default: true
+    - name: user_targeting
+      enabled: true
+    - name: a_b_testing
+      enabled: true
+  default_rollout_percentage: 100  # Full rollout in development
+  monitoring_enabled: true
+
+# Security Configuration
+security:
+  content_security_policy: true
+  strict_transport_security: false  # Disabled for HTTP development environment
+  x_content_type_options: true
+  x_frame_options: SAMEORIGIN  # Less restrictive for development
+  referrer_policy: no-referrer-when-downgrade  # Less restrictive for development
+  cors:
+    allowed_origins:
+      - http://dollarfunding-dev.vercel.app
+      - http://localhost:3000
+      - http://localhost:8080  # Vite dev server port as specified in technical requirements
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+      - PATCH  # Additional method for development
+    allowed_headers:
+      - Content-Type
+      - Authorization
+      - X-Debug-Mode
+      - X-Development-Mode  # Additional header for development
+    expose_headers:
+      - Content-Length
+      - X-Request-ID
+      - X-Development-Info  # Additional header for development
+    max_age_seconds: 86400
+    allow_credentials: true
+  rate_limiting:
+    enabled: false  # Disabled for development
+    requests_per_minute: 300  # Higher rate limit for development
+    burst: 500  # Higher burst for development
+
+# Development-Specific Configuration
+development:
+  hot_reload: true
+  source_maps: true
+  mock_services:
+    enabled: true
+    endpoints:
+      - service: email-service
+        mock_url: http://localhost:3001
+      - service: document-service
+        mock_url: http://localhost:3002
+      - service: ocr-service
+        mock_url: http://localhost:3003
+      - service: data-service
+        mock_url: http://localhost:3004
+      - service: notification-service
+        mock_url: http://localhost:3005
+  local_development:
+    enabled: true
+    docker_compose: true
+    vite_dev_server_port: 8080  # As specified in technical requirements
+
+# Compliance and Auditing (minimal for development)
+compliance:
+  audit_logging: true
+  user_action_tracking: true
+  sensitive_data_handling: true
+  retention_period_days: 30  # Shorter retention for development data
+  data_encryption: true

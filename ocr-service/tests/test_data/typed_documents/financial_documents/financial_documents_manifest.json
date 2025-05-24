@@ -1,0 +1,1512 @@
+{
+  "version": "1.0",
+  "description": "Manifest for financial document OCR test data with expected extraction results",
+  "created_at": "2025-05-23",
+  "updated_at": "2025-05-23",
+  "document_count": 6,
+  "categories": [
+    "tax_returns",
+    "bank_statements",
+    "profit_loss_statements",
+    "balance_sheets",
+    "cash_flow_statements",
+    "income_statements"
+  ],
+  "quality_variations": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "documents": [
+    {
+      "id": "tax_return_001",
+      "file_name": "tax_return_001.pdf",
+      "category": "tax_returns",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "language": "en",
+      "description": "Business tax return form 1120 with typed fields",
+      "metadata": {
+        "tax_year": "2022",
+        "form_type": "1120"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_id",
+            "value": "12-3456789",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 190,
+              "left": 200,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_year_beginning",
+            "value": "01/01/2022",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 230,
+              "left": 200,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "tax_year_ending",
+            "value": "12/31/2022",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 230,
+              "left": 350,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_income",
+            "value": "$1,250,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 400,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_deductions",
+            "value": "$950,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "taxable_income",
+            "value": "$300,000",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 550,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_tax",
+            "value": "$63,000",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "income_statement",
+            "location": {
+              "page": 2,
+              "top": 150,
+              "left": 50,
+              "width": 500,
+              "height": 400
+            },
+            "rows": 10,
+            "columns": 2,
+            "headers": ["Item", "Amount"],
+            "data": [
+              ["Gross receipts or sales", "$1,200,000"],
+              ["Returns and allowances", "$25,000"],
+              ["Cost of goods sold", "$500,000"],
+              ["Gross profit", "$675,000"],
+              ["Dividends", "$50,000"],
+              ["Interest", "$25,000"],
+              ["Gross rents", "$0"],
+              ["Gross royalties", "$0"],
+              ["Capital gain net income", "$0"],
+              ["Net gain or (loss)", "$0"]
+            ],
+            "expected_confidence": 0.93
+          }
+        ]
+      }
+    },
+    {
+      "id": "tax_return_002",
+      "file_name": "tax_return_002.pdf",
+      "category": "tax_returns",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 4,
+      "language": "en",
+      "description": "Schedule C (Form 1040) Profit or Loss From Business",
+      "metadata": {
+        "tax_year": "2022",
+        "form_type": "1040-C"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "value": "Smith Consulting Services",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "taxpayer_name",
+            "value": "John Smith",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 140,
+              "left": 200,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "taxpayer_ssn",
+            "value": "XXX-XX-1234",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 140,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "business_code",
+            "value": "541610",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 200,
+              "width": 100,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "gross_receipts",
+            "value": "$175,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_expenses",
+            "value": "$95,000",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 2,
+              "top": 500,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_profit",
+            "value": "$80,000",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 2,
+              "top": 550,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "expense_breakdown",
+            "location": {
+              "page": 2,
+              "top": 150,
+              "left": 50,
+              "width": 500,
+              "height": 350
+            },
+            "rows": 8,
+            "columns": 2,
+            "headers": ["Expense Category", "Amount"],
+            "data": [
+              ["Advertising", "$12,000"],
+              ["Car and truck expenses", "$8,500"],
+              ["Office expenses", "$5,200"],
+              ["Rent or lease", "$24,000"],
+              ["Travel", "$15,300"],
+              ["Utilities", "$4,800"],
+              ["Wages", "$25,200"],
+              ["Other expenses", "$0"]
+            ],
+            "expected_confidence": 0.92
+          }
+        ]
+      }
+    },
+    {
+      "id": "bank_statement_001",
+      "file_name": "bank_statement_001.pdf",
+      "category": "bank_statements",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 2,
+      "language": "en",
+      "description": "Business checking account statement with transaction details",
+      "metadata": {
+        "bank_name": "First National Bank",
+        "account_type": "Business Checking",
+        "statement_period": "January 2023"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 120,
+              "left": 100,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "account_number",
+            "value": "XXXXXXX1234",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 100,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "statement_period",
+            "value": "01/01/2023 - 01/31/2023",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 100,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "beginning_balance",
+            "value": "$125,432.67",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 210,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "ending_balance",
+            "value": "$142,567.89",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 240,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_deposits",
+            "value": "$75,500.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 270,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_withdrawals",
+            "value": "$58,364.78",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 500,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "transaction_history",
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 50,
+              "width": 700,
+              "height": 400
+            },
+            "rows": 15,
+            "columns": 4,
+            "headers": ["Date", "Description", "Withdrawals", "Deposits"],
+            "data": [
+              ["01/03/2023", "Customer Payment - XYZ Inc", "", "$12,500.00"],
+              ["01/05/2023", "Vendor Payment - ABC Supplies", "$3,245.67", ""],
+              ["01/07/2023", "Customer Payment - 123 Corp", "", "$8,750.00"],
+              ["01/10/2023", "Payroll", "$22,456.78", ""],
+              ["01/12/2023", "Customer Payment - Smith LLC", "", "$15,000.00"],
+              ["01/15/2023", "Rent Payment", "$4,500.00", ""],
+              ["01/17/2023", "Customer Payment - Johnson Co", "", "$9,250.00"],
+              ["01/20/2023", "Utility Payment - Electric", "$1,234.56", ""],
+              ["01/22/2023", "Customer Payment - Brown Inc", "", "$11,000.00"],
+              ["01/25/2023", "Vendor Payment - Office Supplies", "$876.45", ""],
+              ["01/27/2023", "Customer Payment - Green Corp", "", "$19,000.00"],
+              ["01/28/2023", "Insurance Payment", "$2,345.67", ""],
+              ["01/29/2023", "Utility Payment - Internet", "$189.95", ""],
+              ["01/30/2023", "Vendor Payment - Marketing", "$23,515.70", ""],
+              ["01/31/2023", "Interest Earned", "", "$0.00"]
+            ],
+            "expected_confidence": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "id": "bank_statement_002",
+      "file_name": "bank_statement_002.pdf",
+      "category": "bank_statements",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 3,
+      "language": "en",
+      "description": "Business savings account statement with quarterly summary",
+      "metadata": {
+        "bank_name": "Second City Bank",
+        "account_type": "Business Savings",
+        "statement_period": "Q1 2023"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 130,
+              "left": 120,
+              "width": 250,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "account_number",
+            "value": "XXXXXXX5678",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 160,
+              "left": 120,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "statement_period",
+            "value": "01/01/2023 - 03/31/2023",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 1,
+              "top": 190,
+              "left": 120,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "beginning_balance",
+            "value": "$250,000.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "ending_balance",
+            "value": "$275,125.50",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 250,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_deposits",
+            "value": "$50,000.00",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 1,
+              "top": 280,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_withdrawals",
+            "value": "$25,000.00",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 1,
+              "top": 310,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "interest_earned",
+            "value": "$125.50",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 340,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "annual_percentage_yield",
+            "value": "0.20%",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 370,
+              "left": 450,
+              "width": 120,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "transaction_history",
+            "location": {
+              "page": 2,
+              "top": 150,
+              "left": 50,
+              "width": 500,
+              "height": 400
+            },
+            "rows": 6,
+            "columns": 4,
+            "headers": ["Date", "Description", "Withdrawals", "Deposits"],
+            "data": [
+              ["01/15/2023", "Transfer from Checking", "", "$25,000.00"],
+              ["01/31/2023", "Interest Payment", "", "$41.67"],
+              ["02/15/2023", "Transfer from Checking", "", "$25,000.00"],
+              ["02/20/2023", "Transfer to Checking", "$25,000.00", ""],
+              ["02/28/2023", "Interest Payment", "", "$41.67"],
+              ["03/31/2023", "Interest Payment", "", "$42.16"]
+            ],
+            "expected_confidence": 0.90
+          }
+        ]
+      }
+    },
+    {
+      "id": "profit_loss_001",
+      "file_name": "profit_loss_001.pdf",
+      "category": "profit_loss_statements",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
+      "language": "en",
+      "description": "Quarterly profit and loss statement with detailed breakdown",
+      "metadata": {
+        "company_name": "Acme Corporation",
+        "period": "Q1 2023",
+        "prepared_by": "Finance Department"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Profit and Loss Statement",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "period",
+            "value": "January 1 - March 31, 2023",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_revenue",
+            "value": "$325,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_expenses",
+            "value": "$275,000.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_income",
+            "value": "$50,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 550,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "prepared_date",
+            "value": "April 15, 2023",
+            "expected_confidence": 0.95,
+            "location": {
+              "page": 2,
+              "top": 600,
+              "left": 100,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "prepared_by",
+            "value": "Finance Department",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 2,
+              "top": 630,
+              "left": 100,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "revenue_breakdown",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Revenue Category", "Amount"],
+            "data": [
+              ["Product Sales", "$250,000.00"],
+              ["Service Revenue", "$50,000.00"],
+              ["Consulting Fees", "$25,000.00"],
+              ["Total Revenue", "$325,000.00"]
+            ],
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "expense_breakdown",
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 100,
+              "width": 500,
+              "height": 200
+            },
+            "rows": 6,
+            "columns": 2,
+            "headers": ["Expense Category", "Amount"],
+            "data": [
+              ["Cost of Goods Sold", "$125,000.00"],
+              ["Salaries and Wages", "$100,000.00"],
+              ["Rent and Utilities", "$25,000.00"],
+              ["Marketing and Advertising", "$15,000.00"],
+              ["Other Expenses", "$10,000.00"],
+              ["Total Expenses", "$275,000.00"]
+            ],
+            "expected_confidence": 0.93
+          }
+        ]
+      }
+    },
+    {
+      "id": "balance_sheet_001",
+      "file_name": "balance_sheet_001.pdf",
+      "category": "balance_sheets",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en",
+      "description": "Company balance sheet with assets, liabilities, and equity",
+      "metadata": {
+        "company_name": "Acme Corporation",
+        "as_of_date": "March 31, 2023",
+        "prepared_by": "Finance Department"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Balance Sheet",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "as_of_date",
+            "value": "As of March 31, 2023",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_assets",
+            "value": "$1,250,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_liabilities",
+            "value": "$750,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_equity",
+            "value": "$500,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_liabilities_and_equity",
+            "value": "$1,250,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 650,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "assets",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 5,
+            "columns": 2,
+            "headers": ["Assets", "Amount"],
+            "data": [
+              ["Current Assets", "$500,000.00"],
+              ["Fixed Assets", "$600,000.00"],
+              ["Intangible Assets", "$100,000.00"],
+              ["Other Assets", "$50,000.00"],
+              ["Total Assets", "$1,250,000.00"]
+            ],
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "liabilities_and_equity",
+            "location": {
+              "page": 1,
+              "top": 400,
+              "left": 100,
+              "width": 500,
+              "height": 250
+            },
+            "rows": 7,
+            "columns": 2,
+            "headers": ["Liabilities and Equity", "Amount"],
+            "data": [
+              ["Current Liabilities", "$250,000.00"],
+              ["Long-term Liabilities", "$500,000.00"],
+              ["Total Liabilities", "$750,000.00"],
+              ["Common Stock", "$200,000.00"],
+              ["Retained Earnings", "$250,000.00"],
+              ["Other Equity", "$50,000.00"],
+              ["Total Equity", "$500,000.00"]
+            ],
+            "expected_confidence": 0.94
+          }
+        ]
+      }
+    },
+    {
+      "id": "cash_flow_001",
+      "file_name": "cash_flow_001.pdf",
+      "category": "cash_flow_statements",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
+      "language": "en",
+      "description": "Quarterly cash flow statement with operating, investing, and financing activities",
+      "metadata": {
+        "company_name": "Acme Corporation",
+        "period": "Q1 2023",
+        "prepared_by": "Finance Department"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Statement of Cash Flows",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "period",
+            "value": "January 1 - March 31, 2023",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_cash_from_operating",
+            "value": "$75,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_cash_from_investing",
+            "value": "-$50,000.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_cash_from_financing",
+            "value": "-$10,000.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_increase_in_cash",
+            "value": "$15,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 650,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "beginning_cash_balance",
+            "value": "$100,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 680,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "ending_cash_balance",
+            "value": "$115,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 710,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "operating_activities",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 5,
+            "columns": 2,
+            "headers": ["Operating Activities", "Amount"],
+            "data": [
+              ["Net Income", "$50,000.00"],
+              ["Depreciation and Amortization", "$15,000.00"],
+              ["Changes in Working Capital", "$10,000.00"],
+              ["Other Operating Activities", "$0.00"],
+              ["Net Cash from Operating Activities", "$75,000.00"]
+            ],
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "investing_activities",
+            "location": {
+              "page": 1,
+              "top": 380,
+              "left": 100,
+              "width": 500,
+              "height": 120
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Investing Activities", "Amount"],
+            "data": [
+              ["Purchase of Property and Equipment", "-$60,000.00"],
+              ["Sale of Property and Equipment", "$10,000.00"],
+              ["Other Investing Activities", "$0.00"],
+              ["Net Cash from Investing Activities", "-$50,000.00"]
+            ],
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "financing_activities",
+            "location": {
+              "page": 1,
+              "top": 510,
+              "left": 100,
+              "width": 500,
+              "height": 120
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Financing Activities", "Amount"],
+            "data": [
+              ["Debt Repayment", "-$20,000.00"],
+              ["Dividends Paid", "-$15,000.00"],
+              ["New Borrowings", "$25,000.00"],
+              ["Net Cash from Financing Activities", "-$10,000.00"]
+            ],
+            "expected_confidence": 0.93
+          }
+        ]
+      }
+    },
+    {
+      "id": "income_statement_001",
+      "file_name": "income_statement_001.pdf",
+      "category": "income_statements",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en",
+      "description": "Quarterly income statement with revenue, expenses, and net income",
+      "metadata": {
+        "company_name": "Acme Corporation",
+        "period": "Q1 2023",
+        "prepared_by": "Finance Department"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Acme Corporation",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Income Statement",
+            "expected_confidence": 0.99,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "period",
+            "value": "January 1 - March 31, 2023",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_revenue",
+            "value": "$500,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "cost_of_goods_sold",
+            "value": "$200,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 330,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "gross_profit",
+            "value": "$300,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 360,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "operating_expenses",
+            "value": "$200,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 450,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "operating_income",
+            "value": "$100,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 480,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "other_income_expense",
+            "value": "-$20,000.00",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 510,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "income_before_tax",
+            "value": "$80,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 540,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "income_tax",
+            "value": "$20,000.00",
+            "expected_confidence": 0.97,
+            "location": {
+              "page": 1,
+              "top": 570,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_income",
+            "value": "$60,000.00",
+            "expected_confidence": 0.98,
+            "location": {
+              "page": 1,
+              "top": 600,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "earnings_per_share",
+            "value": "$0.60",
+            "expected_confidence": 0.96,
+            "location": {
+              "page": 1,
+              "top": 630,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "revenue_breakdown",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 100
+            },
+            "rows": 3,
+            "columns": 2,
+            "headers": ["Revenue Category", "Amount"],
+            "data": [
+              ["Product Revenue", "$350,000.00"],
+              ["Service Revenue", "$150,000.00"],
+              ["Total Revenue", "$500,000.00"]
+            ],
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "operating_expenses_breakdown",
+            "location": {
+              "page": 1,
+              "top": 380,
+              "left": 100,
+              "width": 500,
+              "height": 100
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Expense Category", "Amount"],
+            "data": [
+              ["Selling, General & Administrative", "$120,000.00"],
+              ["Research & Development", "$50,000.00"],
+              ["Depreciation & Amortization", "$30,000.00"],
+              ["Total Operating Expenses", "$200,000.00"]
+            ],
+            "expected_confidence": 0.94
+          }
+        ]
+      }
+    },
+    {
+      "id": "low_quality_financial_001",
+      "file_name": "low_quality_financial_001.pdf",
+      "category": "profit_loss_statements",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 1,
+      "language": "en",
+      "description": "Faxed profit and loss statement with low quality scan",
+      "metadata": {
+        "company_name": "Smith Enterprises",
+        "period": "Q2 2023",
+        "document_quality": "faxed copy"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "company_name",
+            "value": "Smith Enterprises",
+            "expected_confidence": 0.85,
+            "location": {
+              "page": 1,
+              "top": 100,
+              "left": 250,
+              "width": 200,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "document_title",
+            "value": "Profit and Loss Statement",
+            "expected_confidence": 0.82,
+            "location": {
+              "page": 1,
+              "top": 150,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "period",
+            "value": "April 1 - June 30, 2023",
+            "expected_confidence": 0.80,
+            "location": {
+              "page": 1,
+              "top": 180,
+              "left": 200,
+              "width": 300,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_revenue",
+            "value": "$425,000.00",
+            "expected_confidence": 0.78,
+            "location": {
+              "page": 1,
+              "top": 300,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "total_expenses",
+            "value": "$375,000.00",
+            "expected_confidence": 0.76,
+            "location": {
+              "page": 1,
+              "top": 500,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          },
+          {
+            "name": "net_income",
+            "value": "$50,000.00",
+            "expected_confidence": 0.80,
+            "location": {
+              "page": 1,
+              "top": 550,
+              "left": 450,
+              "width": 150,
+              "height": 30
+            },
+            "required": true
+          }
+        ],
+        "tables": [
+          {
+            "name": "revenue_breakdown",
+            "location": {
+              "page": 1,
+              "top": 220,
+              "left": 100,
+              "width": 500,
+              "height": 150
+            },
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Revenue Category", "Amount"],
+            "data": [
+              ["Product Sales", "$300,000.00"],
+              ["Service Revenue", "$100,000.00"],
+              ["Other Income", "$25,000.00"],
+              ["Total Revenue", "$425,000.00"]
+            ],
+            "expected_confidence": 0.75
+          },
+          {
+            "name": "expense_breakdown",
+            "location": {
+              "page": 1,
+              "top": 350,
+              "left": 100,
+              "width": 500,
+              "height": 200
+            },
+            "rows": 6,
+            "columns": 2,
+            "headers": ["Expense Category", "Amount"],
+            "data": [
+              ["Cost of Goods Sold", "$175,000.00"],
+              ["Salaries and Wages", "$120,000.00"],
+              ["Rent and Utilities", "$35,000.00"],
+              ["Marketing and Advertising", "$25,000.00"],
+              ["Other Expenses", "$20,000.00"],
+              ["Total Expenses", "$375,000.00"]
+            ],
+            "expected_confidence": 0.72
+          }
+        ]
+      }
+    }
+  ],
+  "test_parameters": {
+    "confidence_threshold": 0.75,
+    "minimum_accuracy": 0.99,
+    "performance_metrics": [
+      "character_accuracy",
+      "word_accuracy",
+      "field_accuracy",
+      "table_structure_accuracy",
+      "processing_time"
+    ]
+  }

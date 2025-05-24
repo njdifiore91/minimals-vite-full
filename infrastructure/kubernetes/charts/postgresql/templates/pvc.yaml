@@ -1,0 +1,86 @@
+{{- /*
+PersistentVolumeClaim template for PostgreSQL data storage
+This template defines the storage requirements for PostgreSQL database data
+Ensures data persistence across pod restarts and rescheduling
+*/}}
+
+{{- if .Values.persistence.enabled | default true }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "postgresql.fullname" . }}-data
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    app.kubernetes.io/component: primary
+  annotations:
+    {{- with .Values.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.persistence.storageClass }}
+    volume.beta.kubernetes.io/storage-class: {{ .Values.persistence.storageClass }}
+    {{- end }}
+    # Add annotation for backup identification
+    backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=6"
+    # Add annotation for volume expansion capability
+    pv.kubernetes.io/provisioned-by: kubernetes.io/aws-ebs
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode | default "ReadWriteOnce" }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      # Use environment-specific storage size
+      {{- if eq .Values.global.environment "production" }}
+      storage: {{ .Values.persistence.size | default "100Gi" }}
+      {{- else if eq .Values.global.environment "staging" }}
+      storage: {{ .Values.environmentOverrides.staging.persistence.size | default "50Gi" }}
+      {{- else }}
+      storage: {{ .Values.environmentOverrides.development.persistence.size | default "20Gi" }}
+      {{- end }}
+  # Enable volume expansion for growing databases
+  allowVolumeExpansion: true
+{{- end }}
+
+{{- /*
+StatefulSet PVC Template for PostgreSQL replicas
+This template is used by the StatefulSet to create PVCs for each replica
+*/}}
+{{- define "postgresql.pvcTemplate" }}
+persistentVolumeClaim:
+  metadata:
+    name: {{ include "postgresql.fullname" . }}-data
+    labels:
+      {{- include "postgresql.labels" . | nindent 6 }}
+    annotations:
+      {{- with .Values.persistence.annotations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if .Values.persistence.storageClass }}
+      volume.beta.kubernetes.io/storage-class: {{ .Values.persistence.storageClass }}
+      {{- end }}
+      # Add annotation for backup identification
+      backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=6"
+      # Add annotation for volume expansion capability
+      pv.kubernetes.io/provisioned-by: kubernetes.io/aws-ebs
+  spec:
+    accessModes:
+      - {{ .Values.persistence.accessMode | default "ReadWriteOnce" }}
+    {{- if .Values.persistence.storageClass }}
+    storageClassName: {{ .Values.persistence.storageClass }}
+    {{- end }}
+    resources:
+      requests:
+        # Use environment-specific storage size
+        {{- if eq .Values.global.environment "production" }}
+        storage: {{ .Values.persistence.size | default "100Gi" }}
+        {{- else if eq .Values.global.environment "staging" }}
+        storage: {{ .Values.environmentOverrides.staging.persistence.size | default "50Gi" }}
+        {{- else }}
+        storage: {{ .Values.environmentOverrides.development.persistence.size | default "20Gi" }}
+        {{- end }}
+    # Enable volume expansion for growing databases
+    allowVolumeExpansion: true
+{{- end }}

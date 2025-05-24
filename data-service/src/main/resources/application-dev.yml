@@ -1,0 +1,294 @@
+# ===============================
+# DATA SERVICE - DEVELOPMENT CONFIGURATION
+# ===============================
+
+# This file contains development-specific configurations that override the base application.yml settings
+# It is automatically loaded when the application is run with the 'dev' profile
+# e.g., java -jar app.jar --spring.profiles.active=dev
+
+# ===============================
+# SERVER CONFIGURATION
+# ===============================
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: always
+    include-exception: true
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+  http2:
+    enabled: false
+  ssl:
+    enabled: false
+
+# ===============================
+# SPRING CONFIGURATION
+# ===============================
+spring:
+  # Application name
+  application:
+    name: mca-data-service
+  
+  # Database configuration - Development with 1 read replica
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mca_dev
+    username: mca_dev_user
+    password: mca_dev_password
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 20000
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      auto-commit: false
+      pool-name: MCAHikariCP-Dev
+      # Read replica configuration - single replica for development
+      read-only-replicas: true
+      replica-urls: jdbc:postgresql://localhost:5433/mca_dev
+  
+  # JPA/Hibernate configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+        # Development settings
+        jdbc.batch_size: 10
+        order_inserts: true
+        order_updates: true
+        connection.provider_disables_autocommit: true
+        query.in_clause_parameter_padding: true
+        cache:
+          use_second_level_cache: false
+          use_query_cache: false
+  
+  # Flyway migration configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migrations
+    table: flyway_schema_history
+    validate-on-migrate: true
+    out-of-order: true
+  
+  # RabbitMQ configuration - Development without TLS
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    ssl:
+      enabled: false
+    connection-timeout: 10000
+    requested-heartbeat: 30
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1000
+        max-attempts: 3
+        max-interval: 5000
+        multiplier: 2.0
+    listener:
+      simple:
+        concurrency: 3
+        max-concurrency: 5
+        prefetch: 1
+        default-requeue-rejected: true
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          max-interval: 5000
+          multiplier: 2.0
+  
+  # Redis configuration - Development standalone
+  redis:
+    host: localhost
+    port: 6379
+    password: 
+    ssl: false
+    timeout: 2000
+    cluster:
+      enabled: false
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 2
+        max-wait: -1ms
+      shutdown-timeout: 100ms
+
+# ===============================
+# APPLICATION-SPECIFIC CONFIGURATION
+# ===============================
+application:
+  # Security Configuration
+  security:
+    jwt:
+      algorithm: RS256
+      public-key-path: classpath:keys/public_key.pem
+      # Shorter token expiry for development testing
+      token-expiry-minutes: 30
+      refresh-token-expiry-days: 1
+    encryption:
+      # Field-level encryption for PII
+      enabled: true
+      algorithm: AES/GCM/NoPadding
+      secret-key: devOnlySecretKeyForTestingPurposesOnly12345
+      pii-fields:
+        - legalName
+        - dbaName
+        - ein
+        - address
+        - contactName
+        - contactEmail
+        - contactPhone
+        - bankAccountNumber
+        - routingNumber
+        - ssn
+    cors:
+      allowed-origins: http://localhost:3000,http://localhost:3001
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
+      allowed-headers: Authorization,Content-Type,X-Requested-With,Cache-Control
+      exposed-headers: X-Total-Count
+      allow-credentials: true
+      max-age: 3600
+  
+  # S3 Storage Configuration - Development bucket
+  storage:
+    s3:
+      endpoint: http://localhost:9000
+      region: us-east-1
+      access-key: minioadmin
+      secret-key: minioadmin
+      bucket-name: mca-documents-development
+      encryption:
+        enabled: true
+        type: AES256
+      expiration:
+        presigned-url-seconds: 3600  # Longer expiration for development
+  
+  # Cache Configuration
+  cache:
+    redis:
+      enabled: true
+      ttl:
+        application-data: 300  # 5 minutes in seconds for development
+        user-sessions: 3600   # 1 hour in seconds for development
+  
+  # RabbitMQ Exchange and Queue Configuration
+  messaging:
+    exchanges:
+      documents:
+        name: mca.documents
+        type: fanout
+        durable: true
+    queues:
+      document-processing:
+        name: document-processing
+        durable: true
+      data-extraction:
+        name: data-extraction
+        durable: true
+      notification:
+        name: notification
+        durable: true
+    bindings:
+      - exchange: mca.documents
+        queue: document-processing
+        routing-key: ''
+      - exchange: mca.documents
+        queue: data-extraction
+        routing-key: ''
+      - exchange: mca.documents
+        queue: notification
+        routing-key: ''
+
+# ===============================
+# LOGGING CONFIGURATION
+# ===============================
+logging:
+  level:
+    root: INFO
+    com.dollarfunding.mca: DEBUG
+    org.springframework: INFO
+    org.springframework.transaction: DEBUG
+    org.springframework.orm.jpa: DEBUG
+    org.hibernate: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+  file:
+    name: logs/mca-data-service-dev.log
+    max-size: 10MB
+    max-history: 7
+
+# ===============================
+# MANAGEMENT AND MONITORING
+# ===============================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: db,redis,rabbitmq,diskSpace
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  info:
+    git:
+      mode: full
+    env:
+      enabled: true
+    build:
+      enabled: true
+
+# ===============================
+# PERFORMANCE TUNING
+# ===============================
+performance:
+  # Thread pool configuration - smaller for development
+  thread-pool:
+    core-size: 5
+    max-size: 10
+    queue-capacity: 25
+    keep-alive-seconds: 60
+  
+  # Connection timeouts - longer for development debugging
+  timeouts:
+    connect-ms: 10000
+    read-ms: 20000
+    write-ms: 20000
+  
+  # Rate limiting - disabled for development
+  rate-limiting:
+    enabled: false
+    default-limit: 1000
+    default-duration: 60
