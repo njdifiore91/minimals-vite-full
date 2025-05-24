@@ -12,6 +12,43 @@ variable "replica_region" {
   default     = "us-west-2"  # Default replica region, can be overridden in terraform.tfvars
 }
 
+variable "aws_account_id" {
+  description = "The AWS account ID"
+  type        = string
+  # No default value for security reasons, must be provided via terraform.tfvars or environment variables
+}
+
+variable "domain_name" {
+  description = "The domain name for the MCA Application Processing System"
+  type        = string
+  default     = "staging.dollarfunding.com"
+}
+
+variable "cluster_name" {
+  description = "The name of the Kubernetes cluster"
+  type        = string
+  default     = "mca-staging"
+}
+
+variable "kubernetes_config_path" {
+  description = "Path to the Kubernetes config file"
+  type        = string
+  default     = "~/.kube/config"
+}
+
+variable "kubernetes_config_context" {
+  description = "Kubernetes config context to use"
+  type        = string
+  default     = "mca-staging"
+}
+
+variable "grafana_admin_password" {
+  description = "Admin password for Grafana"
+  type        = string
+  sensitive   = true
+  # No default value for security reasons, must be provided via terraform.tfvars or environment variables
+}
+
 # Database variables
 variable "db_name" {
   description = "The name of the PostgreSQL database"
@@ -73,14 +110,14 @@ variable "enable_enhanced_monitoring" {
 variable "monitoring_interval_seconds" {
   description = "The interval in seconds between points when Enhanced Monitoring metrics are collected"
   type        = number
-  default     = 15
+  default     = 60  # Less frequent monitoring for staging
 }
 
 # High availability variables
 variable "multi_az_enabled" {
   description = "Whether to enable Multi-AZ deployment for high availability"
   type        = bool
-  default     = true  # Default to true for staging to match production behavior
+  default     = true  # Default to true for staging as well
 }
 
 # Backup variables
@@ -106,7 +143,7 @@ variable "enable_encryption" {
 variable "enable_deletion_protection" {
   description = "Whether to enable deletion protection for database instances"
   type        = bool
-  default     = false  # Default to false for staging to allow easier cleanup
+  default     = false  # Default to false for staging for easier management
 }
 
 # Performance variables
@@ -119,7 +156,7 @@ variable "enable_performance_insights" {
 variable "performance_insights_retention_period" {
   description = "The retention period for Performance Insights data in days"
   type        = number
-  default     = 7  # 7 days retention
+  default     = 3  # 3 days retention for staging
 }
 
 # Network variables
