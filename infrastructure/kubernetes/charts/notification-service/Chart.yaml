@@ -1,17 +1,18 @@
 apiVersion: v2
 name: notification-service
 version: 0.1.0
-description: Notification Service for the MCA Application Processing System that handles alerts and webhooks
+appVersion: "0.1.0"
+description: Helm chart for the MCA Notification Service - a Node.js microservice that handles alerts and webhooks for the Merchant Cash Advance Application Processing System
 type: application
-appVersion: "1.0.0"
-
-# Dependencies
+maintainers:
+  - name: Dollar Funding DevOps Team
+    email: devops@dollarfunding.com
+keywords:
+  - mca
+  - notification-service
+  - nodejs
+  - webhooks
 dependencies:
   - name: common
-    version: 0.1.0
-    repository: file://../common
-
-# Maintainer information
-maintainers:
-  - name: MCA Application Processing System Team
-    email: devops@dollarfunding.com
+    version: "0.1.0"
+    repository: "file://../common"
