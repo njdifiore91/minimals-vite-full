@@ -1,125 +1,122 @@
 {{- /*
 HorizontalPodAutoscaler template for Email Service.
 
-This template defines the HorizontalPodAutoscaler for the Email Service with specific configurations.
-The Email Service monitors submissions inbox using IMAP protocol and processes incoming emails,
-so it needs appropriate scaling configurations to handle varying email loads.
+This template defines a Kubernetes HorizontalPodAutoscaler (HPA) for the Email Service
+with specific configurations tailored to its workload characteristics. The Email Service
+monitors email inboxes using IMAP protocol and processes incoming emails with attachments,
+requiring specific scaling configurations to handle varying loads.
 
-Key configurations:
-- CPU-based scaling for email processing workload
-- Memory-based scaling for handling email attachments
-- Environment-specific replica counts
-- Stable scaling behavior to prevent flapping
-*/}}
+Key features:
+- CPU and memory-based scaling metrics tailored for Email Service workloads
+- Environment-specific replica configurations
+- Optimized scaling behavior for email processing workloads
+- Custom metrics for monitoring email processing queue depth (when available)
 
-{{- $fullName := include "common.fullname" . -}}
+This HPA ensures the Email Service can scale appropriately to maintain the 99.9% system
+uptime requirement while efficiently processing emails within the 5-minute SLA.
+*/ -}}
 
-{{- /* Set default values for Email Service autoscaling */}}
-{{- $values := .Values.autoscaling | default dict -}}
-{{- $_ := set $values "enabled" (default true $values.enabled) -}}
-{{- $_ := set $values "targetCPUUtilizationPercentage" (default 80 $values.targetCPUUtilizationPercentage) -}}
-{{- $_ := set $values "targetMemoryUtilizationPercentage" (default 80 $values.targetMemoryUtilizationPercentage) -}}
-
-{{- /* Set environment-specific replica counts based on environment and replicaCount */}}
-{{- if eq .Values.global.environment "production" -}}
-  {{- $_ := set $values "minReplicas" (default (default 3 .Values.environments.production.replicaCount) $values.minReplicas) -}}
-  {{- $_ := set $values "maxReplicas" (default 15 $values.maxReplicas) -}}
-  {{- /* Add annotations for production environment */}}
-  {{- $annotations := $values.annotations | default dict -}}
-  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "production" -}}
-  {{- $_ := set $values "annotations" $annotations -}}
-{{- else if eq .Values.global.environment "staging" -}}
-  {{- $_ := set $values "minReplicas" (default (default 2 .Values.environments.staging.replicaCount) $values.minReplicas) -}}
-  {{- $_ := set $values "maxReplicas" (default 8 $values.maxReplicas) -}}
-  {{- /* Add annotations for staging environment */}}
-  {{- $annotations := $values.annotations | default dict -}}
-  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "staging" -}}
-  {{- $_ := set $values "annotations" $annotations -}}
-{{- else -}}
-  {{- $_ := set $values "minReplicas" (default (default 1 .Values.environments.development.replicaCount) $values.minReplicas) -}}
-  {{- $_ := set $values "maxReplicas" (default 5 $values.maxReplicas) -}}
-  {{- /* Add annotations for development environment */}}
-  {{- $annotations := $values.annotations | default dict -}}
-  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "development" -}}
-  {{- $_ := set $values "annotations" $annotations -}}
-  
-  {{- /* Disable autoscaling in development by default, as specified in values.yaml */}}
-  {{- if hasKey .Values.environments.development "autoscaling" -}}
-    {{- if hasKey .Values.environments.development.autoscaling "enabled" -}}
-      {{- $_ := set $values "enabled" .Values.environments.development.autoscaling.enabled -}}
-    {{- end -}}
-  {{- end -}}
-{{- end -}}
-
-{{- /* Configure Email Service specific scaling behavior */}}
-{{- if not $values.behavior -}}
-{{- $_ := set $values "behavior" (dict 
-  "scaleDown" (dict 
-    "stabilizationWindowSeconds" 300 
-    "policies" (list 
-      (dict "type" "Percent" "value" 10 "periodSeconds" 60) 
-      (dict "type" "Pods" "value" 2 "periodSeconds" 60)
-    )
-    "selectPolicy" "Min"
-  )
-  "scaleUp" (dict 
-    "stabilizationWindowSeconds" 0 
-    "policies" (list 
-      (dict "type" "Percent" "value" 100 "periodSeconds" 60) 
-      (dict "type" "Pods" "value" 4 "periodSeconds" 60)
-    )
-    "selectPolicy" "Max"
-  )
-) -}}
-{{- end -}}
-
-{{- /* Set the updated values back to .Values.autoscaling */}}
-{{- $_ := set .Values "autoscaling" $values -}}
-
-{{- /* Create the HorizontalPodAutoscaler resource */}}
-{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+{{- if .Values.autoscaling.enabled | default true }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ $fullName }}
+  name: {{ include "common.names.fullname" . }}
   labels:
-    {{- include "common.labels" . | nindent 4 }}
+    {{- include "common.labels.standard" . | nindent 4 }}
+    {{- if .Values.autoscaling.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.labels "context" $) | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/component: email-service
   annotations:
-    description: "Email Service HorizontalPodAutoscaler for automatic scaling based on CPU and memory utilization"
-    {{- with .Values.autoscaling.annotations }}
-    {{- toYaml . | nindent 4 }}
+    {{- if .Values.autoscaling.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+    kubernetes.io/description: "HPA for Email Service - IMAP polling and document processing"
+    email-service.dollarfunding.com/scaling-policy: "email-processing-optimized"
+    email-service.dollarfunding.com/workload-type: "polling-based"
+    {{- if eq .Release.Namespace "production" }}
+    monitoring.dollarfunding.com/priority: "high"
     {{- end }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
-    name: {{ .Values.autoscaling.scaleTargetRef.name | default $fullName }}
-  minReplicas: {{ .Values.autoscaling.minReplicas }}
-  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
-  {{- if or .Values.autoscaling.targetCPUUtilizationPercentage .Values.autoscaling.targetMemoryUtilizationPercentage .Values.autoscaling.metrics }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default (include "common.names.fullname" .) }}
+  # Environment-specific replica configurations
+  # Production: 3-10 replicas for high availability and load handling
+  # Staging: 2-5 replicas for testing with moderate load
+  # Development: 1-3 replicas for basic functionality
+  minReplicas: {{ if eq .Release.Namespace "production" }}3{{ else if eq .Release.Namespace "staging" }}2{{ else }}1{{ end }}
+  maxReplicas: {{ if eq .Release.Namespace "production" }}10{{ else if eq .Release.Namespace "staging" }}5{{ else }}3{{ end }}
   metrics:
-    {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    # CPU utilization metric - primary scaling metric for Email Service
+    # Target is set to 70% to allow headroom for processing spikes
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
-    {{- end }}
-    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 70 }}
+    # Memory utilization metric - important for email attachment processing
+    # Email attachments can be memory-intensive to process
     - type: Resource
       resource:
         name: memory
         target:
           type: Utilization
-          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+    {{- if .Values.autoscaling.customMetrics }}
+    # Custom metrics - service-specific metrics for email processing
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.customMetrics "context" $) | nindent 4 }}
     {{- end }}
-    {{- if .Values.autoscaling.metrics }}
-    {{- toYaml .Values.autoscaling.metrics | nindent 4 }}
+    {{- if .Values.autoscaling.enableQueueMetric }}
+    # RabbitMQ queue metric - scales based on message backlog
+    - type: Pods
+      pods:
+        metric:
+          name: rabbitmq_queue_messages
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.queueMetricThreshold | default 50 }}
     {{- end }}
-  {{- end }}
-  {{- if .Values.autoscaling.behavior }}
+  # Scaling behavior optimized for email processing workloads
+  # - Quick scale up to handle email processing spikes
+  # - Conservative scale down to prevent thrashing
   behavior:
-    {{- toYaml .Values.autoscaling.behavior | nindent 4 }}
-  {{- end }}
+    scaleDown:
+      # Longer stabilization window for scale down to prevent thrashing
+      # Email processing can be bursty, so we want to avoid scaling down too quickly
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationWindowSeconds | default 300 }}
+      policies:
+      # Scale down conservatively - 10% of current replicas per minute
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleDownPercentage | default 10 }}
+        periodSeconds: 60
+      # Never scale down by more than 1 pod at a time for email service
+      # This ensures we maintain capacity for processing incoming emails
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleDownPods | default 1 }}
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # Short stabilization window for scaling up to ensure quick response to load
+      # This helps maintain the 5-minute processing SLA mentioned in section 0.2.6
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationWindowSeconds | default 60 }}
+      policies:
+      # Scale up by at most 100% of current replicas per minute
+      # This allows for rapid scaling when email volume increases
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleUpPercentage | default 100 }}
+        periodSeconds: 60
+      # But never scale up by more than 2 pods per minute for email service
+      # This prevents over-provisioning while still allowing quick scaling
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleUpPods | default 2 }}
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
 {{- end }}
