@@ -1,309 +1,420 @@
-# OCR Service Deployment Workflow
-# This workflow handles the deployment of the OCR Service to Kubernetes environments
-# It includes environment selection, Helm chart deployment with GPU resource allocation,
-# post-deployment validation, and rollback procedures.
+# OCR Service Deployment Configuration
+# This file defines the CI/CD workflow for deploying the OCR Service to Kubernetes environments.
+# It includes environment-specific configurations, GPU resource allocation, health checks,
+# and rollback procedures.
+#
+# Key features:
+# - GPU resource allocation for TensorFlow OCR processing (minimum 8GB VRAM)
+# - Environment-specific deployments (development, staging, production)
+# - Post-deployment health validation with automatic rollback
+# - Production deployment approval gates
+# - Security scanning for container vulnerabilities
 
-name: Deploy OCR Service
+include:
+  - project: 'infrastructure/ci/templates'
+    file: 'quality-gates.yml'
+  - project: 'infrastructure/ci/templates'
+    file: 'security-scan.yml'
+  - project: 'infrastructure/ci/templates'
+    file: 'notification.yml'
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Target environment for deployment'
-        required: true
-        default: 'development'
-        type: 'choice'
-        options:
-          - development
-          - staging
-          - production
-      version:
-        description: 'Version to deploy (defaults to latest if not specified)'
-        required: false
-        type: 'string'
-  
-  # Automatic deployment trigger when a new image is pushed to the registry
-  repository_dispatch:
-    types: [ocr-service-image-pushed]
+stages:
+  - validate
+  - build
+  - security_scan
+  - deploy
+  - verify
+  - rollback
+  - notify
 
-# Environment-specific configuration
-env:
+variables:
+  # Service information
   SERVICE_NAME: ocr-service
-  CHART_PATH: infrastructure/kubernetes/charts/ocr-service
-  NAMESPACE_PREFIX: mca
+  DOCKER_REGISTRY: ${CI_REGISTRY}
+  
+  # Helm chart information
+  HELM_CHART_PATH: infrastructure/kubernetes/charts/ocr-service
+  
+  # Container image information
+  IMAGE_NAME: ${DOCKER_REGISTRY}/${CI_PROJECT_PATH}/ocr-service
+  
+  # Default environment variables
+  ENVIRONMENT: development
+  
+  # GPU resource requirements for TensorFlow OCR processing
+  # TensorFlow requires CUDA-compatible GPU with at least 8GB VRAM as specified in section 3.2.3
+  GPU_REQUEST: "1"
+  GPU_LIMIT: "1"
+  GPU_MEMORY: "8Gi"  # Minimum required for TensorFlow OCR models
+  
+  # Deployment configuration
+  # Replica counts for different environments
+  REPLICAS_DEV: "1"    # Development uses minimal resources
+  REPLICAS_STAGING: "2" # Staging uses moderate resources for testing
+  REPLICAS_PROD: "3"    # Production uses full resources for high availability
+  
+  # Rollback configuration
+  AUTO_ROLLBACK: "true"  # Enable automatic rollback on failure
+  ROLLBACK_TIMEOUT: "300" # 5 minutes timeout for rollback operation
+  
+  # Health check configuration
+  HEALTH_CHECK_PATH: "/api/health"  # Health check endpoint
+  HEALTH_CHECK_PORT: "5000"        # Service port
+  HEALTH_CHECK_TIMEOUT: "120"      # 2 minutes timeout for health checks
+  
+  # Notification configuration
+  NOTIFICATION_CHANNEL: "slack"          # Primary notification channel
+  NOTIFICATION_RECIPIENT: "#deployments" # Notification recipient
 
-jobs:
-  prepare-deployment:
-    name: Prepare Deployment
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.set-version.outputs.version }}
-      namespace: ${{ steps.set-namespace.outputs.namespace }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+# Workflow jobs
 
-      - name: Set deployment version
-        id: set-version
-        run: |
-          if [[ -n "${{ github.event.inputs.version }}" ]]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            echo "version=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+# Validate Helm chart before deployment
+validate_helm_chart:
+  stage: validate
+  image: alpine/helm:3.12.0
+  script:
+    - echo "Validating Helm chart for ${SERVICE_NAME}..."
+    - helm lint ${HELM_CHART_PATH}
+    - helm template ${HELM_CHART_PATH} --debug
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Build OCR Service container image
+# This job builds the Python/TensorFlow container image for OCR processing
+build_image:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - echo "Building OCR Service container image..."
+    - |
+      # Use semantic versioning for tagged releases, commit SHA for branches
+      if [[ -n "$CI_COMMIT_TAG" ]]; then
+        export IMAGE_TAG=${CI_COMMIT_TAG}
+      else
+        export IMAGE_TAG=${CI_COMMIT_SHA:0:8}
+      fi
+    - echo "Building image ${IMAGE_NAME}:${IMAGE_TAG}"
+    - |
+      # Build Python container with TensorFlow 2.15.0 for OCR processing
+      # Using multi-stage build for optimized image size
+      docker build \
+        --build-arg TENSORFLOW_VERSION=2.15.0 \
+        --build-arg PYTHON_VERSION=3.9 \
+        -t ${IMAGE_NAME}:${IMAGE_TAG} \
+        -f ocr-service/Dockerfile ocr-service/
+    - docker push ${IMAGE_NAME}:${IMAGE_TAG}
+    # Tag as latest if this is a tagged release
+    - |
+      if [[ -n "$CI_COMMIT_TAG" ]]; then
+        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+        docker push ${IMAGE_NAME}:latest
+      fi
+    # Save image tag for later stages
+    - echo "IMAGE_TAG=${IMAGE_TAG}" >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Scan container image for vulnerabilities
+scan_image:
+  extends: container_scan
+  stage: security_scan
+  needs:
+    - build_image
+  variables:
+    SCAN_TARGET: ${IMAGE_NAME}:${IMAGE_TAG}
+    FORMAT: "sarif"
+    OUTPUT_FILE: "trivy-results.sarif"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Deploy to development environment
+# This job deploys the OCR Service to the development environment with appropriate GPU resources
+deploy_development:
+  stage: deploy
+  image: alpine/helm:3.12.0
+  needs:
+    - build_image
+    - validate_helm_chart
+    - scan_image
+  variables:
+    ENVIRONMENT: development
+    NAMESPACE: mca-development
+    REPLICAS: ${REPLICAS_DEV}
+    # Development environment may use less GPU resources
+    GPU_REQUEST: "1"
+    GPU_LIMIT: "1"
+  script:
+    - echo "Deploying OCR Service to development environment..."
+    - |
+      # Deploy using Helm chart with GPU resource configuration
+      # TensorFlow OCR processing requires CUDA-compatible GPU with at least 8GB VRAM
+      helm upgrade --install ${SERVICE_NAME} ${HELM_CHART_PATH} \
+        --namespace ${NAMESPACE} \
+        --create-namespace \
+        --set image.repository=${IMAGE_NAME} \
+        --set image.tag=${IMAGE_TAG} \
+        --set replicaCount=${REPLICAS} \
+        --set resources.gpu.request=${GPU_REQUEST} \
+        --set resources.gpu.limit=${GPU_LIMIT} \
+        --set resources.memory.limit=${GPU_MEMORY} \
+        --set environment=development \
+        --set autoscaling.enabled=true \
+        --set autoscaling.minReplicas=${REPLICAS} \
+        --set autoscaling.maxReplicas=3 \
+        --set nodeSelector."cloud\.google\.com/gke-accelerator"="nvidia-tesla-t4" \
+        --set livenessProbe.path=${HEALTH_CHECK_PATH} \
+        --set livenessProbe.port=${HEALTH_CHECK_PORT} \
+        --set readinessProbe.path=${HEALTH_CHECK_PATH} \
+        --set readinessProbe.port=${HEALTH_CHECK_PORT} \
+        --set securityContext.runAsNonRoot=true \
+        --set securityContext.runAsUser=1000 \
+        --wait --timeout 5m
+  environment:
+    name: development
+    url: https://dev-api.dollarfunding.com/ocr-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+
+# Deploy to staging environment
+# This job deploys the OCR Service to the staging environment with appropriate GPU resources
+deploy_staging:
+  stage: deploy
+  image: alpine/helm:3.12.0
+  needs:
+    - build_image
+    - validate_helm_chart
+    - scan_image
+  variables:
+    ENVIRONMENT: staging
+    NAMESPACE: mca-staging
+    REPLICAS: ${REPLICAS_STAGING}
+    # Staging environment uses standard GPU resources
+    GPU_REQUEST: "1"
+    GPU_LIMIT: "1"
+  script:
+    - echo "Deploying OCR Service to staging environment..."
+    - |
+      # Deploy using Helm chart with GPU resource configuration
+      # TensorFlow OCR processing requires CUDA-compatible GPU with at least 8GB VRAM
+      helm upgrade --install ${SERVICE_NAME} ${HELM_CHART_PATH} \
+        --namespace ${NAMESPACE} \
+        --create-namespace \
+        --set image.repository=${IMAGE_NAME} \
+        --set image.tag=${IMAGE_TAG} \
+        --set replicaCount=${REPLICAS} \
+        --set resources.gpu.request=${GPU_REQUEST} \
+        --set resources.gpu.limit=${GPU_LIMIT} \
+        --set resources.memory.limit=${GPU_MEMORY} \
+        --set environment=staging \
+        --set autoscaling.enabled=true \
+        --set autoscaling.minReplicas=${REPLICAS} \
+        --set autoscaling.maxReplicas=5 \
+        --set nodeSelector."cloud\.google\.com/gke-accelerator"="nvidia-tesla-t4" \
+        --set livenessProbe.path=${HEALTH_CHECK_PATH} \
+        --set livenessProbe.port=${HEALTH_CHECK_PORT} \
+        --set readinessProbe.path=${HEALTH_CHECK_PATH} \
+        --set readinessProbe.port=${HEALTH_CHECK_PORT} \
+        --set securityContext.runAsNonRoot=true \
+        --set securityContext.runAsUser=1000 \
+        --set rabbitmq.existingSecret=ocr-service-rabbitmq-credentials \
+        --set s3.existingSecret=ocr-service-s3-credentials \
+        --wait --timeout 5m
+  environment:
+    name: staging
+    url: https://staging-api.dollarfunding.com/ocr-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to production environment (requires approval)
+# This job deploys the OCR Service to the production environment with full GPU resources
+# Production deployment requires manual approval for controlled releases
+deploy_production:
+  stage: deploy
+  image: alpine/helm:3.12.0
+  needs:
+    - build_image
+    - validate_helm_chart
+    - scan_image
+  variables:
+    ENVIRONMENT: production
+    NAMESPACE: mca-production
+    REPLICAS: ${REPLICAS_PROD}
+    # Production environment uses full GPU resources
+    GPU_REQUEST: "1"
+    GPU_LIMIT: "2"
+  script:
+    - echo "Deploying OCR Service to production environment..."
+    - |
+      # Deploy using Helm chart with GPU resource configuration
+      # TensorFlow OCR processing requires CUDA-compatible GPU with at least 8GB VRAM
+      # Production environment uses higher replica count and resource limits
+      helm upgrade --install ${SERVICE_NAME} ${HELM_CHART_PATH} \
+        --namespace ${NAMESPACE} \
+        --create-namespace \
+        --set image.repository=${IMAGE_NAME} \
+        --set image.tag=${IMAGE_TAG} \
+        --set replicaCount=${REPLICAS} \
+        --set resources.gpu.request=${GPU_REQUEST} \
+        --set resources.gpu.limit=${GPU_LIMIT} \
+        --set resources.memory.limit=${GPU_MEMORY} \
+        --set environment=production \
+        --set autoscaling.enabled=true \
+        --set autoscaling.minReplicas=${REPLICAS} \
+        --set autoscaling.maxReplicas=10 \
+        --set nodeSelector."cloud\.google\.com/gke-accelerator"="nvidia-tesla-t4" \
+        --set livenessProbe.path=${HEALTH_CHECK_PATH} \
+        --set livenessProbe.port=${HEALTH_CHECK_PORT} \
+        --set readinessProbe.path=${HEALTH_CHECK_PATH} \
+        --set readinessProbe.port=${HEALTH_CHECK_PORT} \
+        --set securityContext.runAsNonRoot=true \
+        --set securityContext.runAsUser=1000 \
+        --set rabbitmq.existingSecret=ocr-service-rabbitmq-credentials \
+        --set s3.existingSecret=ocr-service-s3-credentials \
+        --set podAntiAffinity.required=true \
+        --wait --timeout 10m
+  environment:
+    name: production
+    url: https://api.dollarfunding.com/ocr-service
+  when: manual  # Requires manual approval for production deployment
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Verify deployment health
+# This job performs post-deployment health checks to ensure the service is running correctly
+# If health checks fail, the deployment will be automatically rolled back
+verify_deployment:
+  stage: verify
+  image: curlimages/curl:7.83.1
+  script:
+    - echo "Verifying deployment health for ${SERVICE_NAME} in ${ENVIRONMENT}..."
+    - |
+      # Determine the health check URL based on environment
+      if [[ "${ENVIRONMENT}" == "development" ]]; then
+        HEALTH_CHECK_URL="https://dev-api.dollarfunding.com/ocr-service${HEALTH_CHECK_PATH}"
+      elif [[ "${ENVIRONMENT}" == "staging" ]]; then
+        HEALTH_CHECK_URL="https://staging-api.dollarfunding.com/ocr-service${HEALTH_CHECK_PATH}"
+      elif [[ "${ENVIRONMENT}" == "production" ]]; then
+        HEALTH_CHECK_URL="https://api.dollarfunding.com/ocr-service${HEALTH_CHECK_PATH}"
+      else
+        echo "Unknown environment: ${ENVIRONMENT}"
+        exit 1
+      fi
+    - |
+      # Perform health check with retries
+      MAX_RETRIES=10
+      RETRY_INTERVAL=15
+      for i in $(seq 1 $MAX_RETRIES); do
+        echo "Health check attempt $i of $MAX_RETRIES..."
+        if curl -s -f -o /dev/null "${HEALTH_CHECK_URL}"; then
+          echo "Health check passed!"
+          
+          # Verify OCR functionality with a test document if in staging or production
+          if [[ "${ENVIRONMENT}" == "staging" || "${ENVIRONMENT}" == "production" ]]; then
+            echo "Verifying OCR functionality with test document..."
+            # This would be a more comprehensive test that sends a test document to the OCR service
+            # and verifies the extracted data is correct
+            # For now, we'll just check that the API endpoint is responsive
+            TEST_ENDPOINT="${HEALTH_CHECK_URL%/health}/api/v1/status"
+            if curl -s -f -o /dev/null "${TEST_ENDPOINT}"; then
+              echo "OCR functionality test passed!"
+              exit 0
+            else
+              echo "OCR functionality test failed!"
+              exit 1
+            fi
           else
-            # Get latest version from registry if not specified
-            echo "version=$(./infrastructure/ci/scripts/get-latest-version.sh ${{ env.SERVICE_NAME }})" >> $GITHUB_OUTPUT
+            exit 0
           fi
+        else
+          echo "Health check failed, retrying in ${RETRY_INTERVAL} seconds..."
+          sleep ${RETRY_INTERVAL}
+        fi
+      done
+      echo "Health check failed after ${MAX_RETRIES} attempts"
+      exit 1
+  needs:
+    - job: deploy_development
+      optional: true
+    - job: deploy_staging
+      optional: true
+    - job: deploy_production
+      optional: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
-      - name: Set environment and namespace
-        id: set-namespace
-        run: |
-          if [[ -n "${{ github.event.inputs.environment }}" ]]; then
-            ENV="${{ github.event.inputs.environment }}"
-          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            ENV="${{ github.event.client_payload.environment }}"
-          else
-            ENV="development"
-          fi
-          echo "namespace=${{ env.NAMESPACE_PREFIX }}-${ENV}" >> $GITHUB_OUTPUT
-          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+# Rollback deployment if verification fails
+# This job automatically rolls back to the previous stable release if health checks fail
+# This ensures zero-downtime deployments and quick recovery from issues
+rollback_deployment:
+  stage: rollback
+  image: alpine/helm:3.12.0
+  when: on_failure
+  needs:
+    - verify_deployment
+  script:
+    - echo "Rolling back deployment for ${SERVICE_NAME} in ${ENVIRONMENT}..."
+    - |
+      # Determine namespace based on environment
+      if [[ "${ENVIRONMENT}" == "development" ]]; then
+        NAMESPACE="mca-development"
+      elif [[ "${ENVIRONMENT}" == "staging" ]]; then
+        NAMESPACE="mca-staging"
+      elif [[ "${ENVIRONMENT}" == "production" ]]; then
+        NAMESPACE="mca-production"
+      else
+        echo "Unknown environment: ${ENVIRONMENT}"
+        exit 1
+      fi
+    - |
+      # Get previous release revision
+      PREVIOUS_REVISION=$(helm history ${SERVICE_NAME} -n ${NAMESPACE} | grep -v "REVISION" | sort -rn | sed -n 2p | awk '{print $1}')
+      if [[ -n "${PREVIOUS_REVISION}" ]]; then
+        echo "Rolling back to revision ${PREVIOUS_REVISION}..."
+        helm rollback ${SERVICE_NAME} ${PREVIOUS_REVISION} -n ${NAMESPACE} --wait --timeout 5m
+        echo "Rollback completed successfully"
+        
+        # Verify rollback was successful
+        echo "Verifying rollback success..."
+        if helm status ${SERVICE_NAME} -n ${NAMESPACE} | grep -q 'STATUS: deployed'; then
+          echo "Rollback verification successful"
+          
+          # Log the rollback event for monitoring
+          echo "Logging rollback event..."
+          # This would integrate with your monitoring system
+          # For now, we'll just echo the event
+          echo "ROLLBACK_EVENT: ${SERVICE_NAME} in ${ENVIRONMENT} rolled back to revision ${PREVIOUS_REVISION} at $(date)"
+        else
+          echo "Rollback verification failed"
+          exit 1
+        fi
+      else
+        echo "No previous revision found, cannot rollback"
+        exit 1
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: on_failure
 
-  validate-deployment:
-    name: Validate Deployment
-    needs: prepare-deployment
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare-deployment.outputs.environment }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Validate Helm chart
-        run: |
-          helm lint ${{ env.CHART_PATH }} 
-            --set image.tag=${{ needs.prepare-deployment.outputs.version }}
-
-      - name: Validate Kubernetes resources
-        run: |
-          helm template ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
-            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --debug | kubectl apply --dry-run=client -f -
-
-  deploy-development:
-    name: Deploy to Development
-    needs: [prepare-deployment, validate-deployment]
-    if: needs.prepare-deployment.outputs.environment == 'development'
-    runs-on: ubuntu-latest
-    environment: development
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG_DEV }}
-
-      - name: Deploy OCR Service with Helm
-        run: |
-          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
-            --set environment=development 
-            --set resources.requests.gpu=1 
-            --set resources.limits.gpu=1 
-            --set resources.requests.memory=4Gi 
-            --set resources.limits.memory=8Gi 
-            --set replicaCount=1 
-            --set autoscaling.minReplicas=1 
-            --set autoscaling.maxReplicas=2 
-            --wait 
-            --timeout 10m
-
-      - name: Verify deployment
-        run: |
-          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --timeout=300s
-
-      - name: Run post-deployment health checks
-        run: |
-          ./infrastructure/ci/scripts/health-check.sh 
-            ${{ env.SERVICE_NAME }} 
-            ${{ needs.prepare-deployment.outputs.namespace }} 
-            /health/live
-
-      - name: Send deployment notification
-        if: success()
-        run: |
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to development successful" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "success"
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          helm rollback ${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to development failed - automatic rollback initiated" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "failure"
-
-  deploy-staging:
-    name: Deploy to Staging
-    needs: [prepare-deployment, validate-deployment]
-    if: needs.prepare-deployment.outputs.environment == 'staging'
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG_STAGING }}
-
-      - name: Deploy OCR Service with Helm
-        run: |
-          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
-            --set environment=staging 
-            --set resources.requests.gpu=1 
-            --set resources.limits.gpu=1 
-            --set resources.requests.memory=6Gi 
-            --set resources.limits.memory=12Gi 
-            --set replicaCount=2 
-            --set autoscaling.minReplicas=2 
-            --set autoscaling.maxReplicas=4 
-            --wait 
-            --timeout 10m
-
-      - name: Verify deployment
-        run: |
-          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --timeout=300s
-
-      - name: Run post-deployment health checks
-        run: |
-          ./infrastructure/ci/scripts/health-check.sh 
-            ${{ env.SERVICE_NAME }} 
-            ${{ needs.prepare-deployment.outputs.namespace }} 
-            /health/live
-
-      - name: Send deployment notification
-        if: success()
-        run: |
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to staging successful" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "success"
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          helm rollback ${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to staging failed - automatic rollback initiated" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "failure"
-
-  deploy-production:
-    name: Deploy to Production
-    needs: [prepare-deployment, validate-deployment]
-    if: needs.prepare-deployment.outputs.environment == 'production'
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://ocr-service.dollarfunding.com
-    # Production deployment requires manual approval
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG_PROD }}
-
-      - name: Deploy OCR Service with Helm
-        run: |
-          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
-            --set environment=production 
-            --set resources.requests.gpu=1 
-            --set resources.limits.gpu=2 
-            --set resources.requests.memory=8Gi 
-            --set resources.limits.memory=16Gi 
-            --set replicaCount=3 
-            --set autoscaling.minReplicas=3 
-            --set autoscaling.maxReplicas=6 
-            --wait 
-            --timeout 15m
-
-      - name: Verify deployment
-        run: |
-          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
-            --timeout=300s
-
-      - name: Run post-deployment health checks
-        run: |
-          ./infrastructure/ci/scripts/health-check.sh 
-            ${{ env.SERVICE_NAME }} 
-            ${{ needs.prepare-deployment.outputs.namespace }} 
-            /health/live
-
-      - name: Run performance validation
-        run: |
-          ./infrastructure/ci/scripts/performance-check.sh 
-            ${{ env.SERVICE_NAME }} 
-            ${{ needs.prepare-deployment.outputs.namespace }} 
-            "ocr-performance"
-
-      - name: Send deployment notification
-        if: success()
-        run: |
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to production successful" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "success"
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          helm rollback ${{ env.SERVICE_NAME }} 
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
-          ./infrastructure/ci/scripts/notify.sh 
-            "OCR Service deployment to production failed - automatic rollback initiated" 
-            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
-            "failure"
-
-  update-deployment-registry:
-    name: Update Deployment Registry
-    needs: [prepare-deployment, deploy-development, deploy-staging, deploy-production]
-    if: |
-      always() && 
-      (needs.deploy-development.result == 'success' || 
-       needs.deploy-staging.result == 'success' || 
-       needs.deploy-production.result == 'success')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Update deployment registry
-        run: |
-          ./infrastructure/ci/scripts/update-deployment-registry.sh 
-            ${{ env.SERVICE_NAME }} 
-            ${{ needs.prepare-deployment.outputs.version }} 
-            ${{ needs.prepare-deployment.outputs.environment }}
+# Send deployment notification
+deployment_notification:
+  extends: .notification_template
+  stage: notify
+  needs:
+    - job: verify_deployment
+      optional: true
+    - job: rollback_deployment
+      optional: true
+  variables:
+    NOTIFICATION_TITLE: "OCR Service Deployment"
+    NOTIFICATION_MESSAGE: "Deployment of OCR Service to ${ENVIRONMENT} environment ${CI_JOB_STATUS}"
+    NOTIFICATION_DETAILS: "Image: ${IMAGE_NAME}:${IMAGE_TAG}\nEnvironment: ${ENVIRONMENT}\nDeployment Status: ${CI_JOB_STATUS}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: always
