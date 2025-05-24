@@ -1,153 +1,83 @@
 {{- /*
-PostgreSQL Service Template
+PostgreSQL Service for Merchant Cash Advance Application Processing System
 
-This template creates a Kubernetes Service resource that provides a stable endpoint
-for client applications to connect to the PostgreSQL database. The service targets
-the primary PostgreSQL instance for write operations and can load balance read
-operations across replicas when read-write split is enabled.
+This Service provides a stable endpoint for client applications to connect to the PostgreSQL database.
+It targets the primary PostgreSQL instance for write operations by default, and can be configured to
+load balance read operations across replicas when read-write split is enabled.
 
 Features:
-- Provides stable endpoint for client applications to connect to PostgreSQL
-- Targets primary instance for write operations
-- Supports read-write splitting between primary and replica instances
-- Configurable cloud provider integration through annotations
-- Customizable service type (ClusterIP, LoadBalancer, NodePort)
-- Support for connection pooling and high availability
-*/}}
+- Stable DNS name for client connections
+- Support for read-write splitting with annotations
+- Integration with cloud provider load balancing
+- Configurable session affinity
+*/ -}}
 
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "postgresql.fullname" . }}
-  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "postgresql.labels" . | nindent 4 }}
     app.kubernetes.io/component: primary
-    role: primary-endpoint
   annotations:
+    # Description of the service purpose
+    kubernetes.io/description: "PostgreSQL database service for client connections"
+    
     {{- if .Values.service.annotations }}
     {{- toYaml .Values.service.annotations | nindent 4 }}
     {{- end }}
-    {{- if .Values.metrics.enabled }}
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "{{ .Values.metrics.service.port }}"
-    {{- end }}
-    {{- if eq .Values.service.type "LoadBalancer" }}
+    
     # Cloud provider specific annotations
-    {{- if eq .Values.global.cloudProvider "aws" }}
-    service.beta.kubernetes.io/aws-load-balancer-type: "{{ .Values.service.awsLoadBalancerType | default "nlb" }}"
-    service.beta.kubernetes.io/aws-load-balancer-internal: "{{ .Values.service.internal | default "true" }}"
-    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "{{ .Values.service.connectionIdleTimeout | default "60" }}"
+    {{- if eq .Values.global.provider "aws" }}
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    {{- else if eq .Values.global.provider "azure" }}
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    {{- else if eq .Values.global.provider "gcp" }}
+    cloud.google.com/load-balancer-type: "Internal"
     {{- end }}
-    {{- if eq .Values.global.cloudProvider "azure" }}
-    service.beta.kubernetes.io/azure-load-balancer-internal: "{{ .Values.service.internal | default "true" }}"
+    
+    # Read-write split annotations if enabled
+    {{- if .Values.service.readWriteSplit.enabled }}
+    service.beta.kubernetes.io/read-write-split: "true"
+    service.beta.kubernetes.io/read-only-endpoints: "{{ include "postgresql.fullname" . }}-1.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:5432{{- if eq .Values.global.environment "production" }},{{ include "postgresql.fullname" . }}-2.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:5432{{- end }}"
+    service.beta.kubernetes.io/write-only-endpoints: "{{ include "postgresql.fullname" . }}-0.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:5432"
     {{- end }}
-    {{- if eq .Values.global.cloudProvider "gcp" }}
-    cloud.google.com/load-balancer-type: "{{ .Values.service.gcpLoadBalancerType | default "Internal" }}"
-    {{- end }}
-    {{- end }}
-    # Connection pooling annotations
-    postgresql.connection-pooling.enabled: "{{ .Values.connectionPooling.enabled | default "true" }}"
-    postgresql.connection-pooling.min-connections: "{{ .Values.connectionPooling.minConnections | default "10" }}"
-    postgresql.connection-pooling.max-connections: "{{ .Values.connectionPooling.maxConnections | default "50" }}"
 spec:
   type: {{ .Values.service.type }}
-  {{- if eq .Values.service.type "LoadBalancer" }}
-  {{- if .Values.service.loadBalancerIP }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
   loadBalancerIP: {{ .Values.service.loadBalancerIP }}
   {{- end }}
-  {{- if .Values.service.loadBalancerSourceRanges }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
   loadBalancerSourceRanges:
     {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
-  {{- end }}
-  {{- end }}
-  ports:
-    - name: postgresql
-      port: {{ .Values.service.port | default 5432 }}
-      targetPort: postgresql
-      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
-      nodePort: {{ .Values.service.nodePort }}
-      {{- end }}
-      protocol: TCP
-    {{- if .Values.metrics.enabled }}
-    - name: metrics
-      port: {{ .Values.metrics.service.port }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
-  selector:
-    {{- include "postgresql.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: primary
-  {{- if .Values.service.sessionAffinity }}
-  sessionAffinity: {{ .Values.service.sessionAffinity }}
-  {{- end }}
-  {{- if .Values.service.sessionAffinityConfig }}
-  sessionAffinityConfig:
-    {{- toYaml .Values.service.sessionAffinityConfig | nindent 4 }}
   {{- end }}
   {{- if .Values.service.externalTrafficPolicy }}
   externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
   {{- end }}
-  {{- if .Values.service.externalIPs }}
-  externalIPs:
-    {{- toYaml .Values.service.externalIPs | nindent 4 }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml .Values.service.sessionAffinityConfig | nindent 4 }}
   {{- end }}
-  {{- if .Values.service.publishNotReadyAddresses }}
-  publishNotReadyAddresses: {{ .Values.service.publishNotReadyAddresses }}
   {{- end }}
-
-{{- if .Values.readReplicas.enabled }}
----
-# Read-only service for accessing replica instances
-# This service provides read-only access to PostgreSQL replicas for read-heavy operations
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "postgresql.fullname" . }}-read
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "postgresql.labels" . | nindent 4 }}
-    app.kubernetes.io/component: read-replicas
-    role: read-only-endpoint
-  annotations:
-    {{- if .Values.readService.annotations }}
-    {{- toYaml .Values.readService.annotations | nindent 4 }}
-    {{- end }}
-    # Read-write split annotations
-    postgresql.read-write-split.enabled: "true"
-    postgresql.read-only: "true"
-    {{- if .Values.metrics.enabled }}
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "{{ .Values.metrics.service.port }}"
-    {{- end }}
-    # Connection pooling annotations for read replicas
-    postgresql.connection-pooling.enabled: "{{ .Values.connectionPooling.enabled | default "true" }}"
-    postgresql.connection-pooling.min-connections: "{{ .Values.connectionPooling.readMinConnections | default "20" }}"
-    postgresql.connection-pooling.max-connections: "{{ .Values.connectionPooling.readMaxConnections | default "100" }}"
-spec:
-  type: {{ .Values.readService.type | default "ClusterIP" }}
   ports:
     - name: postgresql
       port: {{ .Values.service.port | default 5432 }}
       targetPort: postgresql
       protocol: TCP
-    {{- if .Values.metrics.enabled }}
-    - name: metrics
-      port: {{ .Values.metrics.service.port }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
+      {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
   selector:
+    {{- if .Values.service.readWriteSplit.enabled }}
+    # When read-write split is enabled, target all PostgreSQL pods
     {{- include "postgresql.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: replica
-  {{- if .Values.readService.sessionAffinity }}
-  sessionAffinity: {{ .Values.readService.sessionAffinity }}
-  {{- end }}
-  {{- if .Values.readService.sessionAffinityConfig }}
-  sessionAffinityConfig:
-    {{- toYaml .Values.readService.sessionAffinityConfig | nindent 4 }}
-  {{- end }}
-  {{- if .Values.readService.publishNotReadyAddresses }}
-  publishNotReadyAddresses: {{ .Values.readService.publishNotReadyAddresses }}
-  {{- end }}
-{{- end }}
+    app.kubernetes.io/component: postgresql
+    {{- else }}
+    # By default, target only the primary PostgreSQL pod (ordinal 0)
+    {{- include "postgresql.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+    statefulset.kubernetes.io/pod-name: {{ include "postgresql.fullname" . }}-0
+    {{- end }}
