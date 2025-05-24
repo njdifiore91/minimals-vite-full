@@ -1,338 +1,347 @@
-# Staging Environment CI/CD Configuration for Infrastructure
-# This file defines the staging-specific settings for Terraform workflows
+# Staging Environment Configuration for Terraform Workflows
+# This file defines the staging-specific settings for infrastructure deployments
+# for the Merchant Cash Advance (MCA) Application Processing System
 
-name: Staging Infrastructure Deployment
+name: "MCA Staging Infrastructure Deployment"
 
-# Controls for staging environment
-on:
-  workflow_call:
-    inputs:
-      terraform_version:
-        description: 'Terraform version to use'
-        required: false
-        type: string
-        default: '1.5.7'
-      environment:
-        description: 'Deployment environment'
-        required: false
-        type: string
-        default: 'staging'
-    secrets:
-      TERRAFORM_API_TOKEN:
-        required: true
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
+# Environment identification
+environment:
+  name: "staging"
+  display_name: "Staging"
+  description: "Pre-production staging environment for MCA Application Processing System validation"
+  priority: "high"
+  tags:
+    Environment: "Staging"
+    Application: "MCA"
+    CostCenter: "FIN-123"
+    DataClassification: "Confidential"
+    BusinessUnit: "Funding"
+  performance_requirements:
+    application_processing_time_seconds: 300 # 5 minutes
+    automation_rate_percentage: 93
+    data_extraction_accuracy_percentage: 99
+    system_uptime_percentage: 99.5
 
-# Environment-specific configuration
-env:
-  TF_WORKSPACE: staging
-  TF_VAR_environment: staging
-  # Staging-specific resource sizing (similar to production but with fewer replicas)
-  TF_VAR_db_instance_class: 'db.r6g.large'
-  TF_VAR_db_multi_az: 'true'
-  TF_VAR_db_replica_count: '1'
-  TF_VAR_redis_node_type: 'cache.r6g.large'
-  TF_VAR_redis_replicas_per_shard: '1'
-  TF_VAR_redis_shards: '2'
-  TF_VAR_rabbitmq_instance_type: 'mq.m5.large'
-  TF_VAR_rabbitmq_deployment_mode: 'CLUSTER_MULTI_AZ'
-  TF_VAR_k8s_node_instance_type: 'm6g.large'
-  TF_VAR_k8s_node_min_count: '2'
-  TF_VAR_k8s_node_max_count: '6'
-  TF_VAR_k8s_gpu_node_instance_type: 'g4dn.xlarge'
-  TF_VAR_k8s_gpu_node_min_count: '1'
-  TF_VAR_k8s_gpu_node_max_count: '3'
-  # Staging-specific security settings
-  TF_VAR_enable_waf: 'true'
-  TF_VAR_enable_shield: 'true'
-  TF_VAR_enable_guardduty: 'true'
-  TF_VAR_enable_cloudtrail: 'true'
-  TF_VAR_enable_config: 'true'
-  TF_VAR_enable_security_hub: 'true'
-  TF_VAR_enable_vpc_flow_logs: 'true'
-  TF_VAR_enable_s3_encryption: 'true'
-  TF_VAR_enable_db_encryption: 'true'
-  TF_VAR_enable_kms_cmk: 'true'
-  # Staging-specific monitoring settings
-  TF_VAR_enable_enhanced_monitoring: 'true'
-  TF_VAR_monitoring_retention_days: '30'
-  TF_VAR_alarm_evaluation_periods: '2'
-  TF_VAR_alarm_datapoints_to_alarm: '2'
-  # Staging-specific backup settings
-  TF_VAR_db_backup_retention_days: '14'
-  TF_VAR_enable_point_in_time_recovery: 'true'
-  TF_VAR_enable_cross_region_backup: 'false'
+# Backend state configuration
+backend:
+  type: "s3"
+  config:
+    bucket: "mca-terraform-state-staging"
+    key: "infrastructure/terraform.tfstate"
+    region: "us-east-1"
+    encrypt: true
+    dynamodb_table: "mca-terraform-locks-staging"
+    role_arn: "arn:aws:iam::123456789012:role/TerraformStagingRole"
+    # State locking to prevent concurrent modifications
+    lock_timeout: 1200 # 20 minutes
 
-jobs:
-  # Validate Terraform configuration
-  validate:
-    name: Validate Terraform Configuration
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+# Resource sizing for staging workloads (similar to production but with fewer replicas)
+resource_sizing:
+  # PostgreSQL 14 database configuration
+  database:
+    engine: "postgres"
+    engine_version: "14"
+    instance_class: "db.m5.xlarge"
+    storage_gb: 200
+    read_replicas: 1
+    multi_az: true
+    backup_retention_days: 14
+    deletion_protection: true
+    performance_insights_enabled: true
+    performance_insights_retention_period: 7
+  
+  # Redis 7.0 configuration
+  redis:
+    engine_version: "7.0"
+    node_type: "cache.m5.large"
+    num_shards: 2
+    replicas_per_shard: 1
+    automatic_failover: true
+    multi_az: true
+    transit_encryption_enabled: true
+    at_rest_encryption_enabled: true
+    ttl_settings:
+      application_data_minutes: 15
+      user_sessions_hours: 24
+  
+  # RabbitMQ configuration
+  rabbitmq:
+    instance_type: "mq.m5.large"
+    deployment_mode: "CLUSTER_MULTI_AZ"
+    engine_version: "3.10.20"
+    nodes: 3
+    storage_type: "EBS"
+    message_exchanges:
+      - name: "mca.documents"
+        type: "fanout"
+    message_queues:
+      - name: "document-processing"
+        durable: true
+      - name: "data-extraction"
+        durable: true
+      - name: "notification"
+        durable: true
+  
+  # Kubernetes configuration
+  kubernetes:
+    version: "1.26"
+    node_groups:
+      standard:
+        instance_type: "m5.xlarge"
+        min_size: 2
+        max_size: 6
+        desired_size: 3
+      gpu:
+        # GPU-enabled nodes for OCR service
+        instance_type: "g4dn.xlarge"
+        min_size: 1
+        max_size: 3
+        desired_size: 1
+    namespaces:
+      - name: "staging"
+        resource_quota:
+          cpu: "40"
+          memory: "80Gi"
+          pods: "60"
+        limit_ranges:
+          default_request:
+            cpu: "100m"
+            memory: "256Mi"
+          default_limit:
+            cpu: "1000m"
+            memory: "1Gi"
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
+# Approval process configuration
+approval:
+  required: true
+  approvers_required: 1
+  approver_groups:
+    - "infrastructure-admins"
+    - "release-managers"
+  timeout_minutes: 720 # 12 hours
+  auto_expire: true
+  approval_policy:
+    enforce_separation_of_duties: false
+    require_security_review: true
+    require_compliance_check: true
 
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform -chdir=infrastructure/terraform/environments/staging fmt -check -recursive
-        continue-on-error: false
+# Security settings
+security:
+  encryption:
+    kms_key_id: "arn:aws:kms:us-east-1:123456789012:key/abcd1234-ef56-gh78-ij90-klmnopqrstuv"
+    encrypt_all_volumes: true
+    encrypt_all_s3_buckets: true
+    encryption_algorithm: "AES-256"
+    field_level_encryption_enabled: true
+  network:
+    vpc_flow_logs_enabled: true
+    waf_enabled: true
+    ddos_protection: true
+    cors_configuration:
+      allowed_origins:
+        - "https://staging.dollarfunding.com"
+        - "https://app.staging.dollarfunding.com"
+      allowed_methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Authorization"
+        - "Content-Type"
+      expose_headers:
+        - "Content-Length"
+        - "X-Request-Id"
+      max_age_seconds: 3600
+  compliance:
+    enable_cloudtrail: true
+    enable_config: true
+    enable_guardduty: true
+    enable_security_hub: true
+    data_retention_years: 7
+  access_control:
+    enforce_mfa: true
+    enforce_iam_permissions_boundary: true
+    restrict_public_access: true
+    jwt_authentication:
+      algorithm: "RS256"
+      token_expiry_minutes: 60
+      refresh_token_expiry_days: 7
+    rate_limiting:
+      enabled: true
+      requests_per_minute: 300
+      burst: 500
 
-      - name: Terraform Init
-        id: init
-        run: terraform -chdir=infrastructure/terraform/environments/staging init
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+# Validation steps
+validation:
+  pre_apply:
+    - name: "terraform-validate"
+      timeout_minutes: 10
+      required: true
+    - name: "tfsec-security-scan"
+      timeout_minutes: 15
+      required: true
+      fail_on_severity: "HIGH"
+    - name: "cost-estimation"
+      timeout_minutes: 10
+      threshold_percentage: 15
+      required: true
+    - name: "policy-compliance-check"
+      timeout_minutes: 15
+      required: true
+    - name: "terraform-plan-review"
+      timeout_minutes: 60
+      required: true
+      approvers_required: 1
+  
+  post_apply:
+    - name: "infrastructure-tests"
+      timeout_minutes: 30
+      required: true
+    - name: "connectivity-tests"
+      timeout_minutes: 15
+      required: true
+      services_to_check:
+        - "postgresql"
+        - "rabbitmq"
+        - "redis"
+        - "s3"
+    - name: "security-scan"
+      timeout_minutes: 20
+      required: true
+      scan_types:
+        - "network"
+        - "iam"
+        - "encryption"
+    - name: "integration-tests"
+      timeout_minutes: 45
+      required: true
+      test_paths:
+        - "infrastructure/tests/integration/staging/"
+    - name: "smoke-tests"
+      timeout_minutes: 30
+      required: true
+      test_paths:
+        - "infrastructure/tests/smoke/staging/"
 
-      - name: Terraform Validate
-        id: validate
-        run: terraform -chdir=infrastructure/terraform/environments/staging validate -no-color
+# Notification channels
+notifications:
+  channels:
+    - type: "email"
+      recipients:
+        - "infrastructure-team@dollarfunding.com"
+        - "qa-team@dollarfunding.com"
+    - type: "slack"
+      channel: "#staging-infrastructure-alerts"
+  
+  events:
+    - name: "plan_created"
+      channels: ["slack"]
+      priority: "info"
+    - name: "approval_required"
+      channels: ["email", "slack"]
+      priority: "high"
+    - name: "approval_timeout_warning"
+      channels: ["email", "slack"]
+      priority: "high"
+    - name: "apply_started"
+      channels: ["slack"]
+      priority: "info"
+    - name: "apply_completed"
+      channels: ["email", "slack"]
+      priority: "normal"
+    - name: "apply_failed"
+      channels: ["email", "slack"]
+      priority: "high"
+    - name: "validation_failed"
+      channels: ["email", "slack"]
+      priority: "high"
+    - name: "integration_tests_failed"
+      channels: ["email", "slack"]
+      priority: "high"
 
-      - name: Run tfsec Security Scan
-        uses: aquasecurity/tfsec-action@v1.0.0
-        with:
-          working_directory: infrastructure/terraform/environments/staging
-          soft_fail: false
+# Disaster recovery configuration
+disaster_recovery:
+  state_backup:
+    enabled: true
+    frequency: "daily"
+    retention_days: 30
+  cross_region_replication:
+    enabled: false
+  recovery_time_objective_minutes: 60
+  recovery_point_objective_minutes: 30
+  database_recovery:
+    point_in_time_recovery_enabled: true
+    automated_snapshots_enabled: true
+    snapshot_frequency_hours: 6
+  s3_buckets:
+    - name: "mca-documents-staging"
+      versioning_enabled: true
+      replication_enabled: false
+      lifecycle_rules:
+        transition_to_ia_days: 60
+        transition_to_glacier_days: 180
+        expiration_days: 365
 
-  # Generate Terraform plan for staging
-  plan:
-    name: Generate Terraform Plan
-    needs: validate
-    runs-on: ubuntu-latest
-    environment: staging-plan
-    # Require approval before generating plan
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-    
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+# Monitoring and observability with Datadog
+monitoring:
+  provider: "datadog"
+  metrics_namespace: "MCA/Staging/Infrastructure"
+  dashboard_name: "MCA-Staging-Infrastructure"
+  metrics_collection_interval: 10
+  log_retention_days: 14
+  apm_enabled: true
+  custom_metrics:
+    - name: "application_processing_time"
+      unit: "Seconds"
+      description: "Time to process an application end-to-end"
+    - name: "ocr_accuracy"
+      unit: "Percent"
+      description: "Accuracy of OCR data extraction"
+    - name: "queue_depth"
+      unit: "Count"
+      description: "Number of messages in processing queues"
+    - name: "api_response_time"
+      unit: "Milliseconds"
+      description: "API response time for requests"
+  alarms:
+    - name: "HighCpuUtilization"
+      threshold: 80
+      evaluation_periods: 3
+      period_seconds: 60
+      statistic: "Average"
+      comparison_operator: "GreaterThanThreshold"
+      treat_missing_data: "missing"
+      alarm_actions: ["slack"]
+    - name: "HighDatabaseConnections"
+      threshold: 90
+      evaluation_periods: 3
+      period_seconds: 60
+      statistic: "Average"
+      comparison_operator: "GreaterThanThreshold"
+      treat_missing_data: "missing"
+      alarm_actions: ["slack"]
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Terraform Init
-        id: init
-        run: terraform -chdir=infrastructure/terraform/environments/staging init
-
-      - name: Terraform Plan
-        id: plan
-        run: |
-          terraform -chdir=infrastructure/terraform/environments/staging plan -no-color -input=false -out=tfplan
-        continue-on-error: false
-
-      - name: Run Infracost Analysis
-        uses: infracost/infracost-action@v3
-        with:
-          path: infrastructure/terraform/environments/staging
-          terraform_plan_flags: -out=tfplan
-          terraform_workspace: staging
-
-      - name: Upload Plan Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: terraform-plan-staging
-          path: infrastructure/terraform/environments/staging/tfplan
-          retention-days: 7
-
-      - name: Generate Plan Summary
-        run: |
-          terraform -chdir=infrastructure/terraform/environments/staging show -no-color tfplan > plan-output.txt
-          echo "Plan generated successfully for staging environment"
-
-      - name: Post Plan Summary
-        uses: actions/github-script@v6
-        if: github.event_name == 'pull_request'
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const planOutput = fs.readFileSync('plan-output.txt', 'utf8');
-            const truncatedOutput = planOutput.length > 65000 
-              ? planOutput.substring(0, 65000) + '\n\n... (Output truncated due to size)'
-              : planOutput;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '## Terraform Plan for Staging Environment\n```\n' + truncatedOutput + '\n```'
-            });
-
-  # Apply Terraform plan for staging
-  apply:
-    name: Apply Terraform Plan
-    needs: plan
-    runs-on: ubuntu-latest
-    environment: staging-apply
-    # Require approval before applying to staging
-    permissions:
-      id-token: write
-      contents: read
-    
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: terraform-plan-staging
-          path: infrastructure/terraform/environments/staging
-
-      - name: Terraform Init
-        id: init
-        run: terraform -chdir=infrastructure/terraform/environments/staging init
-
-      - name: Terraform Apply
-        id: apply
-        run: |
-          terraform -chdir=infrastructure/terraform/environments/staging apply -auto-approve tfplan
-        continue-on-error: false
-
-      - name: Notify Slack on Success
-        uses: slackapi/slack-github-action@v1.23.0
-        with:
-          payload: |
-            {
-              "text": "✅ Staging infrastructure deployment completed successfully.",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "✅ Staging Infrastructure Deployment Successful"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Workflow:* ${{ github.workflow }}\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ github.sha }}\n*Triggered by:* ${{ github.actor }}"
-                  }
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "View Workflow"
-                      },
-                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_STAGING }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-
-  # Validate deployment after apply
-  validate-deployment:
-    name: Validate Staging Deployment
-    needs: apply
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Validate Database Availability
-        run: |
-          aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='mca-staging'].DBInstanceStatus" --output text | grep -q "available"
-          echo "Database is available"
-
-      - name: Validate Redis Cluster
-        run: |
-          aws elasticache describe-replication-groups --query "ReplicationGroups[?ReplicationGroupId=='mca-redis-staging'].Status" --output text | grep -q "available"
-          echo "Redis cluster is available"
-
-      - name: Validate RabbitMQ Broker
-        run: |
-          aws mq describe-broker --broker-id mca-rabbitmq-staging --query "BrokerState" --output text | grep -q "RUNNING"
-          echo "RabbitMQ broker is running"
-
-      - name: Validate Kubernetes Cluster
-        run: |
-          aws eks describe-cluster --name mca-staging --query "cluster.status" --output text | grep -q "ACTIVE"
-          echo "Kubernetes cluster is active"
-
-      - name: Validate S3 Buckets
-        run: |
-          aws s3api head-bucket --bucket mca-documents-staging
-          echo "S3 bucket is accessible"
-
-      - name: Run Integration Tests
-        run: |
-          # Run integration tests against staging infrastructure
-          echo "Running integration tests for staging environment"
-          # Add integration test commands here
-          echo "Integration tests passed"
-
-      - name: Notify Slack on Validation Success
-        uses: slackapi/slack-github-action@v1.23.0
-        with:
-          payload: |
-            {
-              "text": "✅ Staging infrastructure validation and integration tests completed successfully.",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "✅ Staging Infrastructure Validation Successful"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "All infrastructure components have been validated and integration tests have passed.\n\n*Workflow:* ${{ github.workflow }}\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ github.sha }}"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_STAGING }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+# Deployment windows
+deployment_windows:
+  allowed_days:
+    - "Monday"
+    - "Tuesday"
+    - "Wednesday"
+    - "Thursday"
+    - "Friday"
+  allowed_hours:
+    start: "09:00"
+    end: "18:00"
+  timezone: "America/New_York"
+  blackout_dates:
+    - "2025-01-01" # New Year's Day
+    - "2025-12-25" # Christmas
+  emergency_override_requires_approval: true
+  emergency_approvers_required: 1
+  change_freeze_periods:
+    - name: "End of Year"
+      start_date: "2025-12-15"
+      end_date: "2026-01-05"
+  notification_before_window_closes_minutes: 60
