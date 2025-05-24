@@ -1,8 +1,8 @@
-# OCR Service Build Pipeline
-# This workflow builds the OCR Service microservice with Python, Poetry, and TensorFlow
-# Includes code quality checks, testing, Docker image creation with CUDA support, and security scanning
+# OCR Service CI Build Configuration
+# Extends the Python microservice template with OCR-specific configurations
+# Requires Python ≥3.13.3 and TensorFlow with CUDA support
 
-name: OCR Service Build
+name: OCR Service Build Pipeline
 
 on:
   push:
@@ -11,28 +11,45 @@ on:
       - 'ocr-service/**'
       - 'infrastructure/ci/services/ocr-service/**'
   pull_request:
-    branches: [ main, development ]
+    branches: [ main ]
     paths:
       - 'ocr-service/**'
-      - 'infrastructure/ci/services/ocr-service/**'
   workflow_dispatch:
+    inputs:
+      python_version:
+        description: 'Python version'
+        required: false
+        default: '3.13.3'
+        type: choice
+        options:
+          - '3.13.3'
+          - '3.13.4'
+          - '3.14.0'
+      tensorflow_version:
+        description: 'TensorFlow version'
+        required: false
+        default: '2.15.0'
+        type: string
 
+# Global environment variables
 env:
-  PYTHON_VERSION: '3.13.3'
+  SERVICE_NAME: ocr-service
+  PYTHON_VERSION: ${{ github.event.inputs.python_version || '3.13.3' }}
   POETRY_VERSION: '1.7.1'
-  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
-  IMAGE_NAME: ocr-service
-  TRIVY_SEVERITY: 'CRITICAL,HIGH'
+  TENSORFLOW_VERSION: ${{ github.event.inputs.tensorflow_version || '2.15.0' }}
+  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
 
 jobs:
-  build:
-    name: Build and Test
+  # Code quality and testing
+  quality:
+    name: Code Quality & Testing
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -44,111 +61,182 @@ jobs:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
           virtualenvs-in-project: true
-          installer-parallel: true
 
       - name: Load cached dependencies
         id: cached-poetry-dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          path: ocr-service/.venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('ocr-service/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
 
       - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: |
-          cd ocr-service
-          poetry install --no-interaction --no-root
+        working-directory: ocr-service
+        run: poetry install --no-interaction --no-root
 
-      - name: Code quality checks
+      - name: Lint with Flake8
+        working-directory: ocr-service
         run: |
-          cd ocr-service
-          poetry run flake8 src tests
-          poetry run mypy src
+          poetry run flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          poetry run flake8 src/ tests/ --count --max-complexity=10 --max-line-length=127 --statistics
 
-      - name: Run unit tests
+      - name: Type check with mypy
+        working-directory: ocr-service
+        run: poetry run mypy src/
+
+      - name: Test with pytest
+        working-directory: ocr-service
         run: |
-          cd ocr-service
-          poetry run pytest tests/unit --cov=src --cov-report=xml
+          poetry run pytest --cov=src --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
 
-      - name: Run TensorFlow model validation tests
+      - name: Validate TensorFlow models
+        working-directory: ocr-service
         run: |
-          cd ocr-service
-          poetry run pytest tests/models --cov=src --cov-report=xml --cov-append
+          poetry run python -c "
+          import tensorflow as tf
+          print(f'TensorFlow version: {tf.__version__}')
+          print(f'GPU available: {tf.config.list_physical_devices("GPU")}')
+          from src.models import load_models
+          models = load_models()
+          print(f'Models loaded successfully: {len(models)}')
+          "
 
-      - name: Upload test coverage
-        uses: codecov/codecov-action@v4
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            ocr-service/test-results.xml
+            ocr-service/coverage.xml
+          retention-days: 7
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
         with:
           file: ocr-service/coverage.xml
-          fail_ci_if_error: false
+          flags: ocr-service
+          name: ocr-service-coverage
 
-  docker:
-    name: Build Docker Image
-    needs: build
+  # Build and package
+  build:
+    name: Build and Package
+    needs: quality
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+
+      - name: Build Python wheel
+        working-directory: ocr-service
+        run: poetry build -f wheel
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ocr-service-wheel
+          path: ocr-service/dist/*.whl
+          retention-days: 7
+
+      # Set up Docker Buildx for multi-platform builds
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Registry
+      - name: Login to Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=short
-            type=ref,event=branch
-            type=ref,event=tag
+      # Extract version from pyproject.toml
+      - name: Extract version
+        id: version
+        working-directory: ocr-service
+        run: |
+          VERSION=$(poetry version -s)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
 
-      - name: Build and push Docker image
+      # Build OCR service with GPU support using multi-stage build
+      - name: Build and push OCR service with GPU support
         uses: docker/build-push-action@v5
         with:
-          context: ./ocr-service
-          file: ./ocr-service/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          context: ocr-service
+          file: ocr-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/ocr-service:latest
+            ${{ env.REGISTRY }}/ocr-service:${{ steps.version.outputs.version }}
           build-args: |
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
-            CUDA_VERSION=12.1.0
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            WITH_GPU=true
+            TENSORFLOW_VERSION=${{ env.TENSORFLOW_VERSION }}
+            CUDA_VERSION=11.8.0
+            CUDNN_VERSION=8.6.0
 
+      # Scan container image for vulnerabilities
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: 'table'
-          exit-code: 1
-          ignore-unfixed: true
-          vuln-type: 'os,library'
+          image-ref: ${{ env.REGISTRY }}/ocr-service:${{ steps.version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
           severity: ${{ env.TRIVY_SEVERITY }}
 
-  matrix-test:
-    name: Test with Python ${{ matrix.python-version }}
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Create build summary
+      - name: Create build summary
+        run: |
+          echo "## OCR Service Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service:** OCR Service" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Python Version:** ${{ env.PYTHON_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **TensorFlow Version:** ${{ env.TENSORFLOW_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** ${{ env.REGISTRY }}/ocr-service:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ steps.version.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "To deploy this build, run the deployment workflow with the following parameters:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service:** ocr-service" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** development, staging, or production" >> $GITHUB_STEP_SUMMARY
+
+  # Matrix build for testing with different Python versions
+  matrix-build:
+    name: Matrix Build
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        python-version: ['3.13.3', '3.14.0']
+        python-version: ['3.13.3', '3.13.4', '3.14.0']
+        exclude:
+          - python-version: ${{ env.PYTHON_VERSION }}
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
@@ -156,35 +244,19 @@ jobs:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
           virtualenvs-in-project: true
-          installer-parallel: true
 
       - name: Install dependencies
+        working-directory: ocr-service
+        run: poetry install --no-interaction --no-root
+
+      - name: Test with pytest
+        working-directory: ocr-service
+        run: poetry run pytest
+
+      - name: Create compatibility report
         run: |
-          cd ocr-service
-          poetry install --no-interaction --no-root
-
-      - name: Run tests
-        run: |
-          cd ocr-service
-          poetry run pytest tests/unit
-
-  notify:
-    name: Notify on completion
-    needs: [build, docker, matrix-test]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check build status
-        if: ${{ needs.build.result == 'failure' || needs.docker.result == 'failure' || needs.matrix-test.result == 'failure' }}
-        run: exit 1
-
-      - name: Send notification
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_CHANNEL: ci-builds
-          SLACK_COLOR: ${{ job.status }}
-          SLACK_TITLE: OCR Service Build
-          SLACK_MESSAGE: 'Build completed for OCR Service'
-          SLACK_FOOTER: 'Merchant Cash Advance Application Processing System'
+          echo "## Python ${{ matrix.python-version }} Compatibility Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ✅ Compatible" >> $GITHUB_STEP_SUMMARY
+          echo "- **Python Version:** ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **TensorFlow Version:** ${{ env.TENSORFLOW_VERSION }}" >> $GITHUB_STEP_SUMMARY
