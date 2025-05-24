@@ -1,55 +1,32 @@
 #!/bin/bash
-# Make script executable: chmod +x rollback-deployment.sh
 
-# =============================================================================
-# Rollback Deployment Script for MCA Application Processing System
-# =============================================================================
+# rollback-deployment.sh
 #
-# This script performs automated rollbacks in case of deployment failures by
-# reverting to previous known-good versions. It identifies the previous version,
-# executes rollback commands, and verifies rollback success to ensure service
-# availability is restored quickly.
+# This script performs rollbacks in case of deployment failures by reverting to previous
+# known-good versions. It identifies the previous version, executes rollback commands,
+# and verifies rollback success to ensure service availability is restored quickly.
 #
-# Features:
-# - Identifies previous known-good version for rollback
-# - Implements Helm rollback commands with appropriate flags
-# - Verifies rollback success through service health checks
-# - Notifies about rollback events through multiple channels
-# - Implements progressive rollback strategy for complex services
-# - Provides detailed logging of rollback process for troubleshooting
-# - Integrates with incident management systems
+# Part of the MCA Application Processing System infrastructure.
 #
-# Usage: ./rollback-deployment.sh [options]
-#
-# Options:
-#   -s, --service <service-name>     Service to rollback (required)
-#   -n, --namespace <namespace>      Kubernetes namespace (required)
-#   -r, --revision <revision>        Specific revision to rollback to (optional)
-#   -t, --timeout <timeout>          Timeout for rollback operation in seconds (default: 300)
-#   -f, --force                      Force rollback even if verification fails
-#   -d, --dry-run                    Simulate rollback without making changes
-#   -v, --verbose                    Enable verbose output
-#   -h, --help                       Display this help message
-#
-# Examples:
-#   ./rollback-deployment.sh --service email-service --namespace mca-production
-#   ./rollback-deployment.sh -s data-service -n mca-staging -r 2 -t 600
-#   ./rollback-deployment.sh -s ocr-service -n mca-development --dry-run
-#
-# =============================================================================
+# Usage: ./rollback-deployment.sh --service <service-name> --namespace <namespace> --environment <env> [options]
 
-set -e
+set -eo pipefail
 
 # Default values
-SERVICE=""
-NAMESPACE=""
-REVISION=""
 TIMEOUT=300
-FORCE=false
-DRY_RUN=false
+RETRIES=3
+RETRY_DELAY=10
 VERBOSE=false
-LOG_FILE="/tmp/rollback-$(date +%Y%m%d-%H%M%S).log"
-INCIDENT_ID="INC-$(date +%Y%m%d-%H%M%S)"
+FORCE=false
+NOTIFY=true
+INCIDENT_SYSTEM="pagerduty"
+ROLLBACK_VERSION=""
+PROGRESSIVE=false
+SKIP_VALIDATION=false
+
+# MCA Application Processing System specific settings
+MCA_CONFIG_DIR="${REPO_ROOT}/infrastructure/ci/config"
+MCA_LOGS_DIR="${REPO_ROOT}/logs"
 
 # Color codes for output
 RED="\033[0;31m"
@@ -58,506 +35,843 @@ YELLOW="\033[0;33m"
 BLUE="\033[0;34m"
 NC="\033[0m" # No Color
 
-# =============================================================================
-# Function Definitions
-# =============================================================================
-
-# Display usage information
-function show_usage() {
-    echo "Usage: $0 [options]"
-    echo ""
-    echo "Options:"
-    echo "  -s, --service <service-name>     Service to rollback (required)"
-    echo "  -n, --namespace <namespace>      Kubernetes namespace (required)"
-    echo "  -r, --revision <revision>        Specific revision to rollback to (optional)"
-    echo "  -t, --timeout <timeout>          Timeout for rollback operation in seconds (default: 300)"
-    echo "  -f, --force                      Force rollback even if verification fails"
-    echo "  -d, --dry-run                    Simulate rollback without making changes"
-    echo "  -v, --verbose                    Enable verbose output"
-    echo "  -h, --help                       Display this help message"
-    echo ""
-    echo "Examples:"
-    echo "  $0 --service email-service --namespace mca-production"
-    echo "  $0 -s data-service -n mca-staging -r 2 -t 600"
-    echo "  $0 -s ocr-service -n mca-development --dry-run"
-    exit 1
-}
+# Script directory for relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Parse command line arguments
-function parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -s|--service)
-                SERVICE="$2"
-                shift 2
-                ;;
-            -n|--namespace)
-                NAMESPACE="$2"
-                shift 2
-                ;;
-            -r|--revision)
-                REVISION="$2"
-                shift 2
-                ;;
-            -t|--timeout)
-                TIMEOUT="$2"
-                shift 2
-                ;;
-            -f|--force)
-                FORCE=true
-                shift
-                ;;
-            -d|--dry-run)
-                DRY_RUN=true
-                shift
-                ;;
-            -v|--verbose)
-                VERBOSE=true
-                shift
-                ;;
-            -h|--help)
-                show_usage
-                ;;
-            *)
-                echo -e "${RED}Error: Unknown option $1${NC}"
-                show_usage
-                ;;
-        esac
-    done
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --service)
+      SERVICE="$2"
+      shift 2
+      ;;
+    --namespace)
+      NAMESPACE="$2"
+      shift 2
+      ;;
+    --environment)
+      ENVIRONMENT="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    --retries)
+      RETRIES="$2"
+      shift 2
+      ;;
+    --retry-delay)
+      RETRY_DELAY="$2"
+      shift 2
+      ;;
+    --version)
+      ROLLBACK_VERSION="$2"
+      shift 2
+      ;;
+    --progressive)
+      PROGRESSIVE=true
+      shift
+      ;;
+    --skip-validation)
+      SKIP_VALIDATION=true
+      shift
+      ;;
+    --force)
+      FORCE=true
+      shift
+      ;;
+    --no-notify)
+      NOTIFY=false
+      shift
+      ;;
+    --incident-system)
+      INCIDENT_SYSTEM="$2"
+      shift 2
+      ;;
+    --verbose)
+      VERBOSE=true
+      shift
+      ;;
+    --help)
+      echo "Usage: ./rollback-deployment.sh --service <service-name> --namespace <namespace> --environment <env> [options]"
+      echo ""
+      echo "Options:"
+      echo "  --service          Service name to rollback (required)"
+      echo "  --namespace        Kubernetes namespace (required)"
+      echo "  --environment      Environment (development, staging, production) (required)"
+      echo "  --timeout          Timeout in seconds for rollback operations (default: 300)"
+      echo "  --retries          Number of retries for rollback operations (default: 3)"
+      echo "  --retry-delay      Delay between retries in seconds (default: 10)"
+      echo "  --version          Specific version to rollback to (default: previous successful release)"
+      echo "  --progressive      Use progressive rollback for complex services"
+      echo "  --skip-validation  Skip validation after rollback"
+      echo "  --force            Force rollback even if validation fails"
+      echo "  --no-notify        Disable notifications"
+      echo "  --incident-system  Incident management system to use (default: pagerduty)"
+      echo "  --verbose          Enable verbose logging"
+      echo "  --help             Display this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Run './rollback-deployment.sh --help' for usage information"
+      exit 1
+      ;;
+  esac
+done
 
-    # Validate required arguments
-    if [[ -z "$SERVICE" ]]; then
-        echo -e "${RED}Error: Service name is required${NC}"
-        show_usage
-    fi
+# Validate required arguments
+if [ -z "$SERVICE" ] || [ -z "$NAMESPACE" ] || [ -z "$ENVIRONMENT" ]; then
+  echo -e "${RED}Error: Missing required arguments${NC}"
+  echo "Run './rollback-deployment.sh --help' for usage information"
+  exit 1
+fi
 
-    if [[ -z "$NAMESPACE" ]]; then
-        echo -e "${RED}Error: Namespace is required${NC}"
-        show_usage
-    fi
+# Validate environment
+if [[ "$ENVIRONMENT" != "development" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "production" ]]; then
+  echo -e "${RED}Error: Environment must be one of: development, staging, production${NC}"
+  exit 1
+fi
+
+# Log function with timestamp
+log() {
+  local level=$1
+  local message=$2
+  local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  
+  case "$level" in
+    "INFO")
+      echo -e "${BLUE}[INFO]${NC} $timestamp - $message"
+      ;;
+    "SUCCESS")
+      echo -e "${GREEN}[SUCCESS]${NC} $timestamp - $message"
+      ;;
+    "WARN")
+      echo -e "${YELLOW}[WARN]${NC} $timestamp - $message"
+      ;;
+    "ERROR")
+      echo -e "${RED}[ERROR]${NC} $timestamp - $message"
+      ;;
+    *)
+      echo -e "$timestamp - $message"
+      ;;
+  esac
+  
+  # Log to file
+  local log_dir="${REPO_ROOT}/logs/rollbacks"
+  mkdir -p "$log_dir"
+  local log_file="${log_dir}/${SERVICE}-${ENVIRONMENT}-$(date +"%Y%m%d").log"
+  echo "$timestamp - [$level] - $message" >> "$log_file"
 }
 
-# Log message to console and log file
-function log() {
-    local level=$1
-    local message=$2
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+# Verbose logging function
+log_verbose() {
+  if [ "$VERBOSE" = true ]; then
+    log "INFO" "$1"
+  fi
+}
+
+# Function to check if helm is available
+check_helm() {
+  if ! command -v helm &> /dev/null; then
+    log "ERROR" "helm is not installed or not in PATH"
+    return 1
+  fi
+  
+  # Check if we can access the cluster
+  if ! helm list -n "$NAMESPACE" &> /dev/null; then
+    log "ERROR" "Cannot connect to Kubernetes cluster or access namespace $NAMESPACE"
+    return 1
+  fi
+  
+  return 0
+}
+
+# Function to check if kubectl is available
+check_kubectl() {
+  if ! command -v kubectl &> /dev/null; then
+    log "ERROR" "kubectl is not installed or not in PATH"
+    return 1
+  fi
+  
+  # Check if we can access the cluster
+  if ! kubectl cluster-info &> /dev/null; then
+    log "ERROR" "Cannot connect to Kubernetes cluster"
+    return 1
+  fi
+  
+  return 0
+}
+
+# Function to retry a command
+retry() {
+  local cmd=$1
+  local description=$2
+  local n=1
+  local max=$RETRIES
+  local delay=$RETRY_DELAY
+  
+  log_verbose "Executing: $description"
+  
+  while true; do
+    log_verbose "Attempt $n/$max: $description"
     
-    case $level in
-        INFO)
-            local color=$GREEN
-            ;;
-        WARN)
-            local color=$YELLOW
-            ;;
-        ERROR)
-            local color=$RED
-            ;;
-        DEBUG)
-            local color=$BLUE
-            if [[ "$VERBOSE" != "true" ]]; then
-                return
-            fi
-            ;;
-        *)
-            local color=$NC
-            ;;
+    if eval "$cmd"; then
+      log_verbose "Command succeeded: $description"
+      return 0
+    fi
+    
+    if [[ $n -lt $max ]]; then
+      log "WARN" "Command failed, retrying in $delay seconds: $description"
+      sleep $delay
+      ((n++))
+    else
+      log "ERROR" "Command failed after $max attempts: $description"
+      return 1
+    fi
+  done
+}
+
+# Function to identify the previous known-good version
+identify_previous_version() {
+  log "INFO" "Identifying previous known-good version for $SERVICE in namespace $NAMESPACE"
+  
+  # Check if a specific version was requested
+  if [ -n "$ROLLBACK_VERSION" ]; then
+    log "INFO" "Using specified rollback version: $ROLLBACK_VERSION"
+    PREVIOUS_VERSION=$ROLLBACK_VERSION
+    return 0
+  fi
+  
+  # Get the current version
+  CURRENT_VERSION=$(helm ls -n "$NAMESPACE" -o json | jq -r ".[] | select(.name==\"$SERVICE\") | .revision")
+  
+  if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" == "null" ]; then
+    log "ERROR" "Could not determine current version for $SERVICE"
+    return 1
+  fi
+  
+  log_verbose "Current version is $CURRENT_VERSION"
+  
+  # Get the release history
+  RELEASE_HISTORY=$(helm history "$SERVICE" -n "$NAMESPACE" -o json)
+  
+  if [ -z "$RELEASE_HISTORY" ] || [ "$RELEASE_HISTORY" == "null" ]; then
+    log "ERROR" "Could not retrieve release history for $SERVICE"
+    return 1
+  fi
+  
+  # Find the previous successful release
+  PREVIOUS_VERSION=$(echo "$RELEASE_HISTORY" | jq -r "[.[] | select(.revision < $CURRENT_VERSION and .status == \"deployed\")] | sort_by(.revision) | reverse | .[0].revision")
+  
+  if [ -z "$PREVIOUS_VERSION" ] || [ "$PREVIOUS_VERSION" == "null" ]; then
+    log "ERROR" "Could not find a previous successful release for $SERVICE"
+    return 1
+  fi
+  
+  log "INFO" "Previous known-good version identified: $PREVIOUS_VERSION"
+  return 0
+}
+
+# Function to get dependent services
+get_dependent_services() {
+  log_verbose "Identifying dependent services for $SERVICE"
+  
+  # Define service dependencies based on the MCA Application Processing System architecture
+  case "$SERVICE" in
+    "api-gateway")
+      # API Gateway depends on all backend services
+      DEPENDENT_SERVICES=("data-service" "notification-service" "document-service" "ocr-service" "email-service")
+      ;;
+    "data-service")
+      # Data service depends on PostgreSQL and RabbitMQ
+      DEPENDENT_SERVICES=("postgresql" "rabbitmq")
+      ;;
+    "notification-service")
+      # Notification service depends on RabbitMQ
+      DEPENDENT_SERVICES=("rabbitmq")
+      ;;
+    "document-service")
+      # Document service depends on RabbitMQ and S3 storage
+      DEPENDENT_SERVICES=("rabbitmq")
+      ;;
+    "ocr-service")
+      # OCR service depends on RabbitMQ and S3 storage
+      DEPENDENT_SERVICES=("rabbitmq")
+      ;;
+    "email-service")
+      # Email service depends on RabbitMQ
+      DEPENDENT_SERVICES=("rabbitmq")
+      ;;
+    "frontend")
+      # Frontend depends on API Gateway
+      DEPENDENT_SERVICES=("api-gateway")
+      ;;
+    *)
+      # No dependencies for other services
+      DEPENDENT_SERVICES=()
+      ;;
+  esac
+  
+  log_verbose "Dependent services for $SERVICE: ${DEPENDENT_SERVICES[*]}"
+  return 0
+}
+
+# Function to perform the rollback
+perform_rollback() {
+  log "INFO" "Rolling back $SERVICE in namespace $NAMESPACE to version $PREVIOUS_VERSION"
+  
+  # Prepare rollback command
+  local rollback_cmd="helm rollback $SERVICE $PREVIOUS_VERSION -n $NAMESPACE --timeout ${TIMEOUT}s"
+  
+  if [ "$FORCE" = true ]; then
+    rollback_cmd="$rollback_cmd --force"
+  fi
+  
+  if [ "$VERBOSE" = true ]; then
+    rollback_cmd="$rollback_cmd --debug"
+  fi
+  
+  # Execute rollback command
+  if ! retry "$rollback_cmd" "Rollback $SERVICE to version $PREVIOUS_VERSION"; then
+    log "ERROR" "Failed to rollback $SERVICE to version $PREVIOUS_VERSION"
+    return 1
+  fi
+  
+  log "SUCCESS" "Successfully rolled back $SERVICE to version $PREVIOUS_VERSION"
+  return 0
+}
+
+# Function to perform progressive rollback
+perform_progressive_rollback() {
+  log "INFO" "Performing progressive rollback for $SERVICE and its dependencies"
+  
+  # Get dependent services
+  get_dependent_services
+  
+  # If no dependencies or progressive flag is not set, just rollback the service
+  if [ ${#DEPENDENT_SERVICES[@]} -eq 0 ] || [ "$PROGRESSIVE" != "true" ]; then
+    perform_rollback
+    return $?
+  fi
+  
+  # Rollback dependent services first
+  for dep_service in "${DEPENDENT_SERVICES[@]}"; do
+    log "INFO" "Checking if dependent service $dep_service needs rollback"
+    
+    # Check if the dependent service exists and has a release history
+    if helm status "$dep_service" -n "$NAMESPACE" &> /dev/null; then
+      # Store original service name
+      local original_service=$SERVICE
+      
+      # Temporarily set SERVICE to the dependent service
+      SERVICE=$dep_service
+      
+      # Identify previous version for the dependent service
+      if identify_previous_version; then
+        # Perform rollback for the dependent service
+        perform_rollback
+        local dep_rollback_status=$?
+        
+        if [ $dep_rollback_status -ne 0 ]; then
+          log "ERROR" "Failed to rollback dependent service $dep_service"
+          # Restore original service name
+          SERVICE=$original_service
+          return 1
+        fi
+      else
+        log "WARN" "Could not identify previous version for dependent service $dep_service, skipping"
+      fi
+      
+      # Restore original service name
+      SERVICE=$original_service
+    else
+      log "WARN" "Dependent service $dep_service not found in namespace $NAMESPACE, skipping"
+    fi
+  done
+  
+  # Now rollback the main service
+  perform_rollback
+  return $?
+}
+
+# Function to validate rollback success
+validate_rollback() {
+  log "INFO" "Validating rollback success for $SERVICE in namespace $NAMESPACE"
+  
+  if [ "$SKIP_VALIDATION" = true ]; then
+    log "WARN" "Skipping validation as requested"
+    return 0
+  fi
+  
+  # Wait for pods to be ready
+  log "INFO" "Waiting for pods to be ready"
+  local wait_cmd="kubectl -n $NAMESPACE wait --for=condition=ready pods -l app=$SERVICE --timeout=${TIMEOUT}s"
+  
+  if ! retry "$wait_cmd" "Wait for pods to be ready"; then
+    log "ERROR" "Pods for $SERVICE did not become ready after rollback"
+    if [ "$FORCE" != "true" ]; then
+      return 1
+    else
+      log "WARN" "Continuing despite validation failure due to --force flag"
+    fi
+  fi
+  
+  # Use the validate-deployment.sh script for comprehensive validation
+  log "INFO" "Running comprehensive validation checks"
+  
+  local validate_script="${SCRIPT_DIR}/validate-deployment.sh"
+  if [ -f "$validate_script" ]; then
+    local validate_cmd="$validate_script --service $SERVICE --namespace $NAMESPACE --environment $ENVIRONMENT --timeout $TIMEOUT"
+    
+    if [ "$VERBOSE" = true ]; then
+      validate_cmd="$validate_cmd --verbose"
+    fi
+    
+    # For MCA Application Processing System, we need service-specific validation options
+    case "$SERVICE" in
+      "email-service")
+        # Skip integration tests for email service during rollback
+        validate_cmd="$validate_cmd --skip-integration"
+        ;;
+      "document-service")
+        # Skip functional tests for document service during rollback
+        validate_cmd="$validate_cmd --skip-functional"
+        ;;
+      "ocr-service")
+        # OCR service needs more time for ML models to load
+        validate_cmd="$validate_cmd --timeout 600"
+        ;;
+      "data-service")
+        # Data service needs database connection validation
+        validate_cmd="$validate_cmd"
+        ;;
+      "notification-service")
+        # Notification service needs RabbitMQ connection validation
+        validate_cmd="$validate_cmd"
+        ;;
+      "api-gateway")
+        # API Gateway needs route validation
+        validate_cmd="$validate_cmd"
+        ;;
+      *)
+        # Default validation
+        validate_cmd="$validate_cmd"
+        ;;
     esac
     
-    echo -e "${color}[$timestamp] [$level] $message${NC}"
-    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-}
-
-# Identify the previous known-good version
-function identify_previous_version() {
-    log "INFO" "Identifying previous known-good version for $SERVICE in namespace $NAMESPACE"
-    
-    # If revision is specified, use it
-    if [[ -n "$REVISION" ]]; then
-        log "INFO" "Using specified revision: $REVISION"
-        return 0
-    fi
-    
-    # Get Helm release history
-    log "DEBUG" "Getting Helm release history for $SERVICE"
-    local history_output
-    if ! history_output=$(helm history "$SERVICE" -n "$NAMESPACE" -o json 2>/dev/null); then
-        log "ERROR" "Failed to get Helm release history for $SERVICE"
+    if ! retry "$validate_cmd" "Validate rollback success"; then
+      log "ERROR" "Validation failed after rollback"
+      if [ "$FORCE" != "true" ]; then
         return 1
+      else
+        log "WARN" "Continuing despite validation failure due to --force flag"
+      fi
     fi
+  else
+    log "WARN" "Validation script not found at $validate_script, skipping comprehensive validation"
     
-    # Parse history to find the previous successful release
-    log "DEBUG" "Parsing Helm release history to find previous successful release"
-    local current_revision=$(echo "$history_output" | jq -r 'map(select(.status == "deployed")) | max_by(.revision) | .revision')
+    # Fallback to basic validation
+    log "INFO" "Performing basic validation"
     
-    if [[ -z "$current_revision" || "$current_revision" == "null" ]]; then
-        log "ERROR" "No deployed revision found for $SERVICE"
+    # Check if pods are running
+    local pod_status=$(kubectl get pods -n "$NAMESPACE" -l "app=$SERVICE" -o jsonpath='{.items[*].status.phase}')
+    if ! echo "$pod_status" | grep -q "Running"; then
+      log "ERROR" "Pods for $SERVICE are not running after rollback"
+      if [ "$FORCE" != "true" ]; then
         return 1
+      else
+        log "WARN" "Continuing despite validation failure due to --force flag"
+      fi
     fi
     
-    if [[ "$current_revision" -le 1 ]]; then
-        log "ERROR" "Current revision is 1, no previous revision available for rollback"
+    # Check if service is available
+    if ! kubectl get service "$SERVICE" -n "$NAMESPACE" &> /dev/null; then
+      log "ERROR" "Service $SERVICE is not available after rollback"
+      if [ "$FORCE" != "true" ]; then
         return 1
+      else
+        log "WARN" "Continuing despite validation failure due to --force flag"
+      fi
     fi
     
-    # Find the previous successful revision
-    local previous_revision=$(echo "$history_output" | \
-        jq -r "map(select(.status == \"superseded\" and .revision < $current_revision)) | max_by(.revision) | .revision")
-    
-    if [[ -z "$previous_revision" || "$previous_revision" == "null" ]]; then
-        log "ERROR" "No previous successful revision found for $SERVICE"
-        return 1
-    fi
-    
-    REVISION="$previous_revision"
-    log "INFO" "Identified previous successful revision: $REVISION"
-    return 0
-}
-
-# Execute the rollback operation
-function execute_rollback() {
-    log "INFO" "Executing rollback of $SERVICE in namespace $NAMESPACE to revision $REVISION"
-    
-    local helm_args=("rollback" "$SERVICE" "$REVISION" "-n" "$NAMESPACE" "--timeout" "${TIMEOUT}s" "--wait")
-    
-    # Add dry-run flag if specified
-    if [[ "$DRY_RUN" == "true" ]]; then
-        helm_args+=("--dry-run")
-        log "WARN" "DRY RUN MODE: No actual changes will be made"
-    fi
-    
-    # Add force flag if specified
-    if [[ "$FORCE" == "true" ]]; then
-        helm_args+=("--force")
-        log "WARN" "FORCE MODE: Rollback will proceed even if there are issues"
-    fi
-    
-    # Execute Helm rollback command
-    log "DEBUG" "Executing: helm ${helm_args[*]}"
-    if ! helm "${helm_args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
-        log "ERROR" "Helm rollback failed for $SERVICE to revision $REVISION"
-        return 1
-    fi
-    
-    log "INFO" "Rollback executed successfully for $SERVICE to revision $REVISION"
-    return 0
-}
-
-# Verify rollback success through service checks
-function verify_rollback() {
-    log "INFO" "Verifying rollback success for $SERVICE in namespace $NAMESPACE"
-    
-    # Skip verification in dry-run mode
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log "WARN" "Skipping verification in dry-run mode"
-        return 0
-    fi
-    
-    # Wait for pods to be ready
-    log "DEBUG" "Waiting for pods to be ready"
-    if ! kubectl rollout status deployment "$SERVICE" -n "$NAMESPACE" --timeout="${TIMEOUT}s" 2>&1 | tee -a "$LOG_FILE"; then
-        log "ERROR" "Pods for $SERVICE did not reach ready state after rollback"
-        if [[ "$FORCE" != "true" ]]; then
-            return 1
-        fi
-        log "WARN" "Continuing despite pod readiness failure due to --force flag"
-    fi
-    
-    # Check service health endpoint
-    log "DEBUG" "Checking service health endpoint"
-    local pod_name=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=$SERVICE" -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
-    
-    if [[ -z "$pod_name" ]]; then
-        log "ERROR" "No pods found for $SERVICE after rollback"
-        if [[ "$FORCE" != "true" ]]; then
-            return 1
-        fi
-        log "WARN" "Continuing despite pod availability failure due to --force flag"
-        return 0
-    fi
-    
-    # Determine health endpoint based on service type
-    local health_endpoint="/health"
-    local service_type=$(kubectl get deployment "$SERVICE" -n "$NAMESPACE" -o jsonpath="{.spec.template.metadata.labels.serviceType}" 2>/dev/null)
-    
-    case $service_type in
-        nodejs)
-            health_endpoint="/health"
-            ;;
-        java)
-            health_endpoint="/actuator/health"
-            ;;
-        python)
-            health_endpoint="/health/live"
-            ;;
-        *)
-            health_endpoint="/health"
-            ;;
-    esac
-    
-    log "DEBUG" "Using health endpoint: $health_endpoint for service type: $service_type"
-    
-    # Check health endpoint using port-forward
-    local port=8080
-    log "DEBUG" "Setting up port-forward to pod $pod_name"
-    kubectl port-forward "$pod_name" "$port:$port" -n "$NAMESPACE" &
-    local port_forward_pid=$!
-    
-    # Give port-forward time to establish
-    sleep 3
-    
-    # Check health endpoint
-    log "DEBUG" "Checking health endpoint: http://localhost:$port$health_endpoint"
-    local health_status
-    if ! health_status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port$health_endpoint"); then
-        log "ERROR" "Failed to connect to health endpoint"
-        kill $port_forward_pid 2>/dev/null || true
-        if [[ "$FORCE" != "true" ]]; then
-            return 1
-        fi
-        log "WARN" "Continuing despite health check failure due to --force flag"
-        return 0
-    fi
-    
-    # Clean up port-forward
-    kill $port_forward_pid 2>/dev/null || true
-    
-    # Check if health status is 200 OK
-    if [[ "$health_status" == "200" ]]; then
-        log "INFO" "Health check passed: $health_status"
-    else
-        log "ERROR" "Health check failed with status: $health_status"
-        if [[ "$FORCE" != "true" ]]; then
-            return 1
-        fi
-        log "WARN" "Continuing despite health check failure due to --force flag"
-    fi
-    
-    return 0
-}
-
-# Notify about rollback events
-function notify_rollback() {
-    local status=$1
-    local message=$2
-    
-    log "INFO" "Sending rollback notification: $status - $message"
-    
-    # Skip notification in dry-run mode
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log "WARN" "Skipping notification in dry-run mode"
-        return 0
-    fi
-    
-    # Determine environment from namespace
-    local environment="development"
-    if [[ "$NAMESPACE" == *"staging"* ]]; then
-        environment="staging"
-    elif [[ "$NAMESPACE" == *"prod"* ]]; then
-        environment="production"
-    fi
-    
-    # Prepare notification payload
-    local payload='{"incident_id":"'"$INCIDENT_ID"'","service":"'"$SERVICE"'","namespace":"'"$NAMESPACE"'","environment":"'"$environment"'","revision":"'"$REVISION"'","status":"'"$status"'","message":"'"$message"'","timestamp":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"}'
-    
-    # Send notification to Datadog
-    log "DEBUG" "Sending notification to Datadog"
-    if command -v datadog-agent &>/dev/null; then
-        if ! datadog-agent event "Rollback $status: $SERVICE" "$message" --tags "service:$SERVICE,environment:$environment,incident:$INCIDENT_ID" 2>&1 | tee -a "$LOG_FILE"; then
-            log "WARN" "Failed to send notification to Datadog"
-        fi
-    else
-        log "WARN" "Datadog agent not found, skipping Datadog notification"
-    fi
-    
-    # Send notification to Slack (if webhook URL is configured)
-    if [[ -n "$SLACK_WEBHOOK_URL" ]]; then
-        log "DEBUG" "Sending notification to Slack"
-        local color="good"
-        if [[ "$status" != "SUCCESS" ]]; then
-            color="danger"
-        fi
-        
-        local slack_payload='{"attachments":[{"color":"'"$color"'","title":"Rollback '"$status"': '"$SERVICE"'","text":"'"$message"'","fields":[{"title":"Service","value":"'"$SERVICE"'","short":true},{"title":"Environment","value":"'"$environment"'","short":true},{"title":"Namespace","value":"'"$NAMESPACE"'","short":true},{"title":"Revision","value":"'"$REVISION"'","short":true},{"title":"Incident ID","value":"'"$INCIDENT_ID"'","short":true}]}]}'
-        
-        if ! curl -s -X POST -H "Content-Type: application/json" -d "$slack_payload" "$SLACK_WEBHOOK_URL" 2>&1 | tee -a "$LOG_FILE"; then
-            log "WARN" "Failed to send notification to Slack"
-        fi
-    else
-        log "WARN" "SLACK_WEBHOOK_URL not configured, skipping Slack notification"
-    fi
-    
-    # Create incident in PagerDuty (if API key is configured)
-    if [[ -n "$PAGERDUTY_API_KEY" && "$status" != "SUCCESS" && "$environment" == "production" ]]; then
-        log "DEBUG" "Creating incident in PagerDuty"
-        local pagerduty_payload='{"incident":{"type":"incident","title":"Rollback '"$status"': '"$SERVICE"' in '"$environment"'","service":{"id":"'"$PAGERDUTY_SERVICE_ID"'"},"body":{"type":"incident_body","details":"'"$message"'"},"incident_key":"'"$INCIDENT_ID"'"}}}'
-        
-        if ! curl -s -X POST -H "Content-Type: application/json" -H "Authorization: Token token=$PAGERDUTY_API_KEY" -H "Accept: application/vnd.pagerduty+json;version=2" -H "From: rollback@dollarfunding.com" -d "$pagerduty_payload" "https://api.pagerduty.com/incidents" 2>&1 | tee -a "$LOG_FILE"; then
-            log "WARN" "Failed to create incident in PagerDuty"
-        fi
-    else
-        log "DEBUG" "Skipping PagerDuty incident creation (not configured or not production or successful rollback)"
-    fi
-    
-    return 0
-}
-
-# Implement progressive rollback strategy for complex services
-function progressive_rollback() {
-    log "INFO" "Implementing progressive rollback strategy for $SERVICE"
-    
-    # Skip in dry-run mode
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log "WARN" "Skipping progressive rollback in dry-run mode"
-        return 0
-    fi
-    
-    # Check if service has dependencies that need to be rolled back first
-    local has_dependencies=false
-    
-    # Define service dependencies (which services should be rolled back first)
-    case $SERVICE in
-        data-service)
-            # Data service has no dependencies that need to be rolled back first
-            has_dependencies=false
-            ;;
-        ocr-service|document-service)
-            # These services depend on data-service
-            has_dependencies=true
-            local dependencies=("data-service")
-            ;;
-        notification-service)
-            # Notification service depends on data-service
-            has_dependencies=true
-            local dependencies=("data-service")
-            ;;
-        email-service)
-            # Email service depends on document-service and data-service
-            has_dependencies=true
-            local dependencies=("data-service" "document-service")
-            ;;
-        *)
-            # Default: no dependencies
-            has_dependencies=false
-            ;;
-    esac
-    
-    # If service has dependencies, check if they need to be rolled back
-    if [[ "$has_dependencies" == "true" ]]; then
-        log "INFO" "Service $SERVICE has dependencies that may need to be rolled back first"
-        
-        for dep in "${dependencies[@]}"; do
-            log "DEBUG" "Checking if dependency $dep needs to be rolled back"
-            
-            # Check if dependency is in a failed state
-            local dep_status=$(kubectl get deployment "$dep" -n "$NAMESPACE" -o jsonpath="{.status.conditions[?(@.type=='Available')].status}" 2>/dev/null)
-            
-            if [[ "$dep_status" != "True" ]]; then
-                log "WARN" "Dependency $dep appears to be in a failed state, it should be rolled back first"
-                log "WARN" "Please run: $0 -s $dep -n $NAMESPACE"
-                
-                if [[ "$FORCE" != "true" ]]; then
-                    log "ERROR" "Aborting rollback due to dependency issue. Use --force to override."
-                    return 1
-                fi
-                
-                log "WARN" "Continuing despite dependency issue due to --force flag"
+    # For MCA Application Processing System, check service-specific health endpoints
+    case "$SERVICE" in
+      "data-service")
+        # Check Spring Boot actuator health endpoint
+        local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=$SERVICE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$pod_name" ]; then
+          log_verbose "Checking data-service health endpoint"
+          kubectl -n "$NAMESPACE" port-forward "$pod_name" 8080:8080 &> /dev/null &
+          local port_forward_pid=$!
+          sleep 2
+          local health_status=$(curl -s http://localhost:8080/actuator/health)
+          kill $port_forward_pid 2> /dev/null || true
+          wait $port_forward_pid 2> /dev/null || true
+          
+          if ! echo "$health_status" | grep -q '"status":"UP"'; then
+            log "ERROR" "Data service health check failed"
+            if [ "$FORCE" != "true" ]; then
+              return 1
             else
-                log "DEBUG" "Dependency $dep appears to be healthy"
+              log "WARN" "Continuing despite health check failure due to --force flag"
             fi
-        done
-    fi
-    
+          fi
+        fi
+        ;;
+      "api-gateway")
+        # Check Kong status
+        local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=$SERVICE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$pod_name" ]; then
+          log_verbose "Checking API Gateway (Kong) status"
+          if ! kubectl -n "$NAMESPACE" exec "$pod_name" -- kong health | grep -q "Kong is healthy"; then
+            log "ERROR" "API Gateway (Kong) health check failed"
+            if [ "$FORCE" != "true" ]; then
+              return 1
+            else
+              log "WARN" "Continuing despite health check failure due to --force flag"
+            fi
+          fi
+        fi
+        ;;
+    esac
+  fi
+  
+  log "SUCCESS" "Rollback validation successful for $SERVICE"
+  return 0
+}
+
+# Function to send notification
+send_notification() {
+  local status=$1
+  local message=$2
+  
+  if [ "$NOTIFY" != "true" ]; then
+    log_verbose "Notifications disabled, skipping"
     return 0
+  fi
+  
+  log "INFO" "Sending rollback notification to $INCIDENT_SYSTEM"
+  
+  # Prepare notification data
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local hostname=$(hostname)
+  local user=$(whoami)
+  
+  # Get Git information if available
+  local git_commit=""
+  if [ -d "${REPO_ROOT}/.git" ]; then
+    git_commit=$(git -C "${REPO_ROOT}" rev-parse HEAD)
+  fi
+  
+  # Create notification payload
+  local payload="{\
+    \"service\": \"$SERVICE\",\
+    \"namespace\": \"$NAMESPACE\",\
+    \"environment\": \"$ENVIRONMENT\",\
+    \"status\": \"$status\",\
+    \"message\": \"$message\",\
+    \"timestamp\": \"$timestamp\",\
+    \"hostname\": \"$hostname\",\
+    \"user\": \"$user\",\
+    \"git_commit\": \"$git_commit\",\
+    \"previous_version\": \"$PREVIOUS_VERSION\"\
+  }"
+  
+  # Send notification based on incident system
+  case "$INCIDENT_SYSTEM" in
+    "pagerduty")
+      # PagerDuty integration
+      # Get PagerDuty key from environment or config file
+      local pagerduty_key=""
+      if [ -n "$PAGERDUTY_KEY" ]; then
+        pagerduty_key="$PAGERDUTY_KEY"
+      elif [ -f "${REPO_ROOT}/infrastructure/ci/config/pagerduty.conf" ]; then
+        pagerduty_key=$(grep -oP 'PAGERDUTY_KEY=\K.*' "${REPO_ROOT}/infrastructure/ci/config/pagerduty.conf")
+      fi
+      
+      if [ -n "$pagerduty_key" ]; then
+        log_verbose "Sending notification to PagerDuty"
+        
+        # Create PagerDuty-specific payload
+        local pd_payload="{\
+          \"routing_key\": \"$pagerduty_key\",\
+          \"event_action\": \"trigger\",\
+          \"payload\": {\
+            \"summary\": \"$message\",\
+            \"source\": \"$hostname\",\
+            \"severity\": \"$status\",\
+            \"component\": \"$SERVICE\",\
+            \"group\": \"$ENVIRONMENT\",\
+            \"class\": \"rollback\",\
+            \"custom_details\": $payload\
+          }\
+        }"
+        
+        # Send to PagerDuty
+        if [ "$VERBOSE" = true ]; then
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "$pd_payload" \
+            "https://events.pagerduty.com/v2/enqueue"
+        else
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "$pd_payload" \
+            "https://events.pagerduty.com/v2/enqueue" > /dev/null
+        fi
+      else
+        log "WARN" "PagerDuty key not found, notification not sent"
+      fi
+      ;;
+      
+    "slack")
+      # Slack integration
+      # Get Slack webhook from environment or config file
+      local slack_webhook=""
+      if [ -n "$SLACK_WEBHOOK" ]; then
+        slack_webhook="$SLACK_WEBHOOK"
+      elif [ -f "${REPO_ROOT}/infrastructure/ci/config/slack.conf" ]; then
+        slack_webhook=$(grep -oP 'SLACK_WEBHOOK=\K.*' "${REPO_ROOT}/infrastructure/ci/config/slack.conf")
+      fi
+      
+      if [ -n "$slack_webhook" ]; then
+        log_verbose "Sending notification to Slack"
+        
+        # Create Slack-specific payload
+        local slack_payload="{\
+          \"text\": \"*$status*: $message\",\
+          \"attachments\": [\
+            {\
+              \"color\": \"${status,,}\" == \"success\" ? \"good\" : \"danger\",\
+              \"fields\": [\
+                { \"title\": \"Service\", \"value\": \"$SERVICE\", \"short\": true },\
+                { \"title\": \"Environment\", \"value\": \"$ENVIRONMENT\", \"short\": true },\
+                { \"title\": \"Namespace\", \"value\": \"$NAMESPACE\", \"short\": true },\
+                { \"title\": \"Previous Version\", \"value\": \"$PREVIOUS_VERSION\", \"short\": true },\
+                { \"title\": \"Triggered By\", \"value\": \"$user@$hostname\", \"short\": true },\
+                { \"title\": \"Timestamp\", \"value\": \"$timestamp\", \"short\": true }\
+              ]\
+            }\
+          ]\
+        }"
+        
+        # Send to Slack
+        if [ "$VERBOSE" = true ]; then
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "$slack_payload" \
+            "$slack_webhook"
+        else
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "$slack_payload" \
+            "$slack_webhook" > /dev/null
+        fi
+      else
+        log "WARN" "Slack webhook not found, notification not sent"
+      fi
+      ;;
+      
+    "jira")
+      # Jira integration
+      # Get Jira credentials from environment or config file
+      local jira_url=""
+      local jira_user=""
+      local jira_token=""
+      
+      if [ -n "$JIRA_URL" ] && [ -n "$JIRA_USER" ] && [ -n "$JIRA_TOKEN" ]; then
+        jira_url="$JIRA_URL"
+        jira_user="$JIRA_USER"
+        jira_token="$JIRA_TOKEN"
+      elif [ -f "${REPO_ROOT}/infrastructure/ci/config/jira.conf" ]; then
+        jira_url=$(grep -oP 'JIRA_URL=\K.*' "${REPO_ROOT}/infrastructure/ci/config/jira.conf")
+        jira_user=$(grep -oP 'JIRA_USER=\K.*' "${REPO_ROOT}/infrastructure/ci/config/jira.conf")
+        jira_token=$(grep -oP 'JIRA_TOKEN=\K.*' "${REPO_ROOT}/infrastructure/ci/config/jira.conf")
+      fi
+      
+      if [ -n "$jira_url" ] && [ -n "$jira_user" ] && [ -n "$jira_token" ]; then
+        log_verbose "Creating Jira issue for rollback event"
+        
+        # Create Jira-specific payload
+        local jira_payload="{\
+          \"fields\": {\
+            \"project\": { \"key\": \"MCA\" },\
+            \"summary\": \"[$ENVIRONMENT] Rollback of $SERVICE to version $PREVIOUS_VERSION\",\
+            \"description\": \"$message\\n\\nDetails:\\n$payload\",\
+            \"issuetype\": { \"name\": \"Incident\" },\
+            \"priority\": { \"name\": \"${status,,}\" == \"success\" ? \"Medium\" : \"High\" },\
+            \"labels\": [\"rollback\", \"$ENVIRONMENT\", \"$SERVICE\"],\
+            \"customfield_10001\": \"$PREVIOUS_VERSION\"\
+          }\
+        }"
+        
+        # Send to Jira
+        if [ "$VERBOSE" = true ]; then
+          curl -s -X POST -H "Content-Type: application/json" \
+            -H "Authorization: Basic $(echo -n "$jira_user:$jira_token" | base64)" \
+            -d "$jira_payload" \
+            "$jira_url/rest/api/2/issue"
+        else
+          curl -s -X POST -H "Content-Type: application/json" \
+            -H "Authorization: Basic $(echo -n "$jira_user:$jira_token" | base64)" \
+            -d "$jira_payload" \
+            "$jira_url/rest/api/2/issue" > /dev/null
+        fi
+      else
+        log "WARN" "Jira credentials not found, notification not sent"
+      fi
+      ;;
+      
+    *)
+      log "WARN" "Unknown incident system: $INCIDENT_SYSTEM"
+      ;;
+  esac
+  
+  log "INFO" "Notification sent to $INCIDENT_SYSTEM"
+  return 0
+}
+
+# Function to create incident ticket
+create_incident_ticket() {
+  local status=$1
+  local message=$2
+  
+  if [ "$NOTIFY" != "true" ]; then
+    log_verbose "Incident tracking disabled, skipping"
+    return 0
+  fi
+  
+  log "INFO" "Creating incident ticket in $INCIDENT_SYSTEM"
+  
+  # Prepare incident data
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local incident_id="ROLLBACK-${SERVICE}-${ENVIRONMENT}-$(date +"%Y%m%d%H%M%S")"
+  
+  # Create incident payload
+  local payload="{\
+    \"incident_id\": \"$incident_id\",\
+    \"service\": \"$SERVICE\",\
+    \"namespace\": \"$NAMESPACE\",\
+    \"environment\": \"$ENVIRONMENT\",\
+    \"status\": \"$status\",\
+    \"message\": \"$message\",\
+    \"timestamp\": \"$timestamp\",\
+    \"previous_version\": \"$PREVIOUS_VERSION\"\
+  }"
+  
+  # Write incident information to local file for tracking
+  local incidents_dir="${REPO_ROOT}/logs/incidents"
+  mkdir -p "$incidents_dir"
+  local incident_file="${incidents_dir}/${incident_id}.json"
+  echo "$payload" > "$incident_file"
+  
+  # For MCA Application Processing System, we use the same incident system as notifications
+  # So we'll just call the send_notification function
+  send_notification "$status" "$message"
+  
+  log "INFO" "Incident ticket created: $incident_id"
+  return 0
+}
+
+# Function to capture and save rollback metrics
+save_rollback_metrics() {
+  local status=$1
+  local start_time=$2
+  local end_time=$3
+  
+  # Calculate duration in seconds
+  local duration=$((end_time - start_time))
+  
+  # Create metrics directory if it doesn't exist
+  local metrics_dir="${REPO_ROOT}/logs/metrics"
+  mkdir -p "$metrics_dir"
+  
+  # Create metrics file
+  local metrics_file="${metrics_dir}/rollback-metrics.csv"
+  
+  # Create header if file doesn't exist
+  if [ ! -f "$metrics_file" ]; then
+    echo "timestamp,service,namespace,environment,status,duration,previous_version" > "$metrics_file"
+  fi
+  
+  # Append metrics
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "$timestamp,$SERVICE,$NAMESPACE,$ENVIRONMENT,$status,$duration,$PREVIOUS_VERSION" >> "$metrics_file"
+  
+  log_verbose "Rollback metrics saved to $metrics_file"
 }
 
 # Main function
-function main() {
-    log "INFO" "Starting rollback process for $SERVICE in namespace $NAMESPACE"
-    log "INFO" "Incident ID: $INCIDENT_ID"
-    log "INFO" "Log file: $LOG_FILE"
-    
-    # Check if kubectl is available
-    if ! command -v kubectl &>/dev/null; then
-        log "ERROR" "kubectl command not found"
-        notify_rollback "FAILED" "kubectl command not found"
-        exit 1
+main() {
+  # Record start time
+  local start_time=$(date +%s)
+  
+  log "INFO" "Starting rollback process for $SERVICE in namespace $NAMESPACE ($ENVIRONMENT environment)"
+  
+  # Check if helm and kubectl are available
+  if ! check_helm || ! check_kubectl; then
+    log "ERROR" "Required tools are not available, cannot proceed with rollback"
+    local end_time=$(date +%s)
+    save_rollback_metrics "FAILED" "$start_time" "$end_time"
+    exit 1
+  fi
+  
+  # Create incident ticket for the rollback operation
+  create_incident_ticket "STARTED" "Rollback operation started for $SERVICE in $ENVIRONMENT environment"
+  
+  # Identify the previous known-good version
+  if ! identify_previous_version; then
+    log "ERROR" "Failed to identify previous known-good version, cannot proceed with rollback"
+    send_notification "FAILED" "Failed to identify previous known-good version for $SERVICE in $ENVIRONMENT environment"
+    local end_time=$(date +%s)
+    save_rollback_metrics "FAILED" "$start_time" "$end_time"
+    exit 1
+  fi
+  
+  # For MCA Application Processing System, use progressive rollback for production environment
+  if [ "$ENVIRONMENT" = "production" ]; then
+    log "INFO" "Using progressive rollback for production environment"
+    PROGRESSIVE=true
+  fi
+  
+  # Perform the rollback (progressive if specified)
+  if [ "$PROGRESSIVE" = true ]; then
+    if ! perform_progressive_rollback; then
+      log "ERROR" "Progressive rollback failed for $SERVICE"
+      send_notification "FAILED" "Progressive rollback failed for $SERVICE in $ENVIRONMENT environment"
+      local end_time=$(date +%s)
+      save_rollback_metrics "FAILED" "$start_time" "$end_time"
+      exit 1
     fi
-    
-    # Check if helm is available
-    if ! command -v helm &>/dev/null; then
-        log "ERROR" "helm command not found"
-        notify_rollback "FAILED" "helm command not found"
-        exit 1
+  else
+    if ! perform_rollback; then
+      log "ERROR" "Rollback failed for $SERVICE"
+      send_notification "FAILED" "Rollback failed for $SERVICE in $ENVIRONMENT environment"
+      local end_time=$(date +%s)
+      save_rollback_metrics "FAILED" "$start_time" "$end_time"
+      exit 1
     fi
-    
-    # Check if jq is available
-    if ! command -v jq &>/dev/null; then
-        log "ERROR" "jq command not found"
-        notify_rollback "FAILED" "jq command not found"
-        exit 1
-    fi
-    
-    # Check if namespace exists
-    if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
-        log "ERROR" "Namespace $NAMESPACE does not exist"
-        notify_rollback "FAILED" "Namespace $NAMESPACE does not exist"
-        exit 1
-    fi
-    
-    # Check if service exists
-    if ! kubectl get deployment "$SERVICE" -n "$NAMESPACE" &>/dev/null; then
-        log "ERROR" "Service $SERVICE does not exist in namespace $NAMESPACE"
-        notify_rollback "FAILED" "Service $SERVICE does not exist in namespace $NAMESPACE"
-        exit 1
-    fi
-    
-    # Implement progressive rollback strategy
-    if ! progressive_rollback; then
-        log "ERROR" "Progressive rollback strategy failed"
-        notify_rollback "FAILED" "Progressive rollback strategy failed"
-        exit 1
-    fi
-    
-    # Identify previous known-good version
-    if ! identify_previous_version; then
-        log "ERROR" "Failed to identify previous known-good version"
-        notify_rollback "FAILED" "Failed to identify previous known-good version"
-        exit 1
-    fi
-    
-    # Execute rollback
-    if ! execute_rollback; then
-        log "ERROR" "Rollback execution failed"
-        notify_rollback "FAILED" "Rollback execution failed"
-        exit 1
-    fi
-    
-    # Verify rollback success
-    if ! verify_rollback; then
-        log "ERROR" "Rollback verification failed"
-        notify_rollback "FAILED" "Rollback verification failed"
-        exit 1
-    fi
-    
-    # Notify about successful rollback
-    notify_rollback "SUCCESS" "Successfully rolled back $SERVICE in namespace $NAMESPACE to revision $REVISION"
-    
-    log "INFO" "Rollback process completed successfully"
-    log "INFO" "Service: $SERVICE"
-    log "INFO" "Namespace: $NAMESPACE"
-    log "INFO" "Revision: $REVISION"
-    log "INFO" "Log file: $LOG_FILE"
-    
-    return 0
+  fi
+  
+  # Validate rollback success
+  if ! validate_rollback; then
+    log "ERROR" "Rollback validation failed for $SERVICE"
+    send_notification "FAILED" "Rollback validation failed for $SERVICE in $ENVIRONMENT environment"
+    local end_time=$(date +%s)
+    save_rollback_metrics "FAILED" "$start_time" "$end_time"
+    exit 1
+  fi
+  
+  # Record end time and save metrics
+  local end_time=$(date +%s)
+  save_rollback_metrics "SUCCESS" "$start_time" "$end_time"
+  
+  # Send success notification
+  send_notification "SUCCESS" "Successfully rolled back $SERVICE to version $PREVIOUS_VERSION in $ENVIRONMENT environment"
+  
+  log "SUCCESS" "Rollback process completed successfully for $SERVICE in namespace $NAMESPACE ($ENVIRONMENT environment)"
+  log "INFO" "Rollback duration: $((end_time - start_time)) seconds"
+  exit 0
 }
 
-# =============================================================================
-# Script Execution
-# =============================================================================
-
-# Parse command line arguments
-parse_args "$@"
-
-# Execute main function
+# Run the main function
 main
