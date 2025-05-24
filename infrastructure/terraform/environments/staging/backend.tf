@@ -3,6 +3,7 @@
 # This file configures the Terraform backend for storing and managing the staging environment's state.
 # It enables team collaboration by providing a centralized, versioned state storage with locking
 # to prevent concurrent modifications by multiple team members.
+# Staging environment has appropriate access controls for pre-production validation.
 
 terraform {
   # Terraform version constraint - ensures compatibility with the codebase
@@ -26,10 +27,8 @@ terraform {
     encrypt        = true                             # Encrypt state file at rest
     dynamodb_table = "terraform-locks"               # DynamoDB table for state locking
     
-    # Additional backend settings
-    # These would typically be provided via CLI or environment variables
-    # profile        = "staging"                     # AWS profile for staging environment
-    # role_arn       = "arn:aws:iam::ACCOUNT_ID:role/TerraformExecutionRole"
+    # Staging-specific backend settings with appropriate security
+    # role_arn       = "arn:aws:iam::ACCOUNT_ID:role/TerraformStagingRole"  # Staging-specific IAM role
     
     # State file versioning is enabled at the bucket level
     # This allows for state recovery in case of accidental corruption
