@@ -1,743 +1,1061 @@
 #!/bin/bash
-# Make script executable with: chmod +x create-namespace.sh
 
+# =============================================================================
 # create-namespace.sh
-# 
-# This script creates and configures Kubernetes namespaces for dynamic environments
-# with proper resource quotas, network policies, and RBAC configuration.
+# =============================================================================
 #
-# It supports:
-# - Dynamic namespace generation based on Git branch or PR information
-# - Environment-specific resource quotas (feature, development, staging, production)
-# - Network policy configuration for service isolation
-# - RBAC setup with appropriate roles and service accounts
-# - Validation to prevent namespace collisions
-# - Cleanup hooks for ephemeral environments
+# Creates and configures Kubernetes namespaces for dynamic environments with
+# proper resource quotas and network policies. It generates namespace names
+# based on branch or PR information, applies appropriate resource limits, and
+# configures network policies for service isolation.
 #
-# Usage: ./create-namespace.sh [options]
+# This script enables the dynamic environment creation feature described in the
+# CI/CD pipeline architecture, allowing isolated testing environments for
+# feature branches.
 #
-# Options:
-#   --env-type <type>       Environment type: feature, development, staging, production
-#   --branch <branch>       Git branch name (for feature environments)
-#   --pr <number>           PR number (for feature environments)
-#   --prefix <prefix>       Namespace prefix (default: mca)
-#   --cleanup <days>        Days until cleanup for ephemeral environments (default: 7)
-#   --dry-run               Show what would be done without making changes
-#   --help                  Show this help message
+# Usage:
+#   ./create-namespace.sh --env-type <type> --branch-name <branch> [--pr-number <number>] [--cleanup <true|false>]
+#
+# Arguments:
+#   --env-type     Environment type (feature, development, staging, production)
+#   --branch-name  Git branch name (required for feature environments)
+#   --pr-number    Pull request number (optional, for feature environments)
+#   --cleanup      Whether to add cleanup hooks (default: true for feature environments)
+#   --help         Display this help message
+#
+# Examples:
+#   ./create-namespace.sh --env-type feature --branch-name feature/add-ocr --pr-number 123
+#   ./create-namespace.sh --env-type development
+#   ./create-namespace.sh --env-type staging
+#   ./create-namespace.sh --env-type production
+#
+# =============================================================================
 
-set -eo pipefail
+set -e
 
-# Default values
-ENV_TYPE=""
-BRANCH_NAME=""
-PR_NUMBER=""
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# Base namespace prefix
 NAMESPACE_PREFIX="mca"
-CLEANUP_DAYS=7
-DRY_RUN=false
 
-# Colors for output
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[0;33m"
-BLUE="\033[0;34m"
-NC="\033[0m" # No Color
+# Maximum namespace name length (Kubernetes limit is 63 characters)
+MAX_NAMESPACE_LENGTH=63
 
-# Log functions
+# Default cleanup setting
+DEFAULT_CLEANUP="true"
+
+# Resource quota templates location
+RESOURCE_QUOTA_TEMPLATES="/infrastructure/kubernetes/namespaces/resource-quotas.yaml"
+
+# Network policy templates location
+NETWORK_POLICY_TEMPLATES="/infrastructure/kubernetes/namespaces/network-policies"
+
+# RBAC templates location
+RBAC_TEMPLATES="/infrastructure/kubernetes/namespaces/rbac.yaml"
+
+# =============================================================================
+# Logging functions
+# =============================================================================
+
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+  echo -e "\033[0;32m[INFO]\033[0m $1"
 }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+log_warn() {
+  echo -e "\033[0;33m[WARN]\033[0m $1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+  echo -e "\033[0;31m[ERROR]\033[0m $1"
 }
 
-# Help function
+log_debug() {
+  if [[ "${DEBUG:-false}" == "true" ]]; then
+    echo -e "\033[0;34m[DEBUG]\033[0m $1"
+  fi
+}
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
 show_help() {
-    echo "Usage: $0 [options]"
-    echo ""
-    echo "Options:"
-    echo "  --env-type <type>       Environment type: feature, development, staging, production"
-    echo "  --branch <branch>       Git branch name (for feature environments)"
-    echo "  --pr <number>           PR number (for feature environments)"
-    echo "  --prefix <prefix>       Namespace prefix (default: mca)"
-    echo "  --cleanup <days>        Days until cleanup for ephemeral environments (default: 7)"
-    echo "  --dry-run               Show what would be done without making changes"
-    echo "  --help                  Show this help message"
-    echo ""
-    echo "Example:"
-    echo "  $0 --env-type feature --branch feature/add-email-service --prefix mca --cleanup 5"
-    echo "  $0 --env-type development --prefix mca"
-    echo "  $0 --env-type staging --prefix mca"
-    echo "  $0 --env-type production --prefix mca"
+  grep '^#' "$0" | grep -v '#!/bin/bash' | sed 's/^#//' | sed 's/^ //' | sed '/^$/q'
+  exit 0
 }
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    key="$1"
-    case $key in
-        --env-type)
-            ENV_TYPE="$2"
-            shift
-            shift
-            ;;
-        --branch)
-            BRANCH_NAME="$2"
-            shift
-            shift
-            ;;
-        --pr)
-            PR_NUMBER="$2"
-            shift
-            shift
-            ;;
-        --prefix)
-            NAMESPACE_PREFIX="$2"
-            shift
-            shift
-            ;;
-        --cleanup)
-            CLEANUP_DAYS="$2"
-            shift
-            shift
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        --help)
-            show_help
-            exit 0
-            ;;
-        *)
-            log_error "Unknown option: $1"
-            show_help
-            exit 1
-            ;;
-    esac
-done
+check_command() {
+  if ! command -v "$1" &> /dev/null; then
+    log_error "Required command '$1' not found. Please install it and try again."
+    exit 1
+  fi
+}
 
-# Validate required parameters
-if [[ -z "$ENV_TYPE" ]]; then
-    log_error "Environment type is required. Use --env-type option."
+check_dependencies() {
+  log_debug "Checking dependencies..."
+  check_command "kubectl"
+  check_command "yq"
+  check_command "jq"
+}
+
+validate_input() {
+  # Validate environment type
+  if [[ -z "${ENV_TYPE}" ]]; then
+    log_error "Environment type (--env-type) is required"
     show_help
     exit 1
-fi
+  fi
 
-# Validate environment type
-if [[ "$ENV_TYPE" != "feature" && "$ENV_TYPE" != "development" && "$ENV_TYPE" != "staging" && "$ENV_TYPE" != "production" ]]; then
-    log_error "Invalid environment type: $ENV_TYPE. Must be one of: feature, development, staging, production."
-    show_help
+  if [[ "${ENV_TYPE}" != "feature" && "${ENV_TYPE}" != "development" && "${ENV_TYPE}" != "staging" && "${ENV_TYPE}" != "production" ]]; then
+    log_error "Invalid environment type: ${ENV_TYPE}. Must be one of: feature, development, staging, production"
     exit 1
-fi
+  fi
 
-# For feature environments, either branch or PR is required
-if [[ "$ENV_TYPE" == "feature" && -z "$BRANCH_NAME" && -z "$PR_NUMBER" ]]; then
-    log_error "For feature environments, either branch name or PR number is required."
-    show_help
+  # Validate branch name for feature environments
+  if [[ "${ENV_TYPE}" == "feature" && -z "${BRANCH_NAME}" ]]; then
+    log_error "Branch name (--branch-name) is required for feature environments"
     exit 1
-fi
+  fi
 
-# Generate namespace name
+  # Set default cleanup value for feature environments
+  if [[ "${ENV_TYPE}" == "feature" && -z "${CLEANUP}" ]]; then
+    CLEANUP="${DEFAULT_CLEANUP}"
+    log_debug "Setting default cleanup value: ${CLEANUP}"
+  fi
+}
+
+# =============================================================================
+# Namespace generation and validation
+# =============================================================================
+
 generate_namespace_name() {
-    local env_type=$1
-    local branch_name=$2
-    local pr_number=$3
-    local prefix=$4
-    
-    if [[ "$env_type" == "feature" ]]; then
-        if [[ -n "$pr_number" ]]; then
-            # Use PR number if provided
-            echo "${prefix}-pr-${pr_number}"
-        else
-            # Use branch name, sanitized for Kubernetes
-            # Replace invalid characters with dashes and convert to lowercase
-            local sanitized_branch=$(echo "$branch_name" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
-            # Trim to 63 characters (Kubernetes limit) minus prefix length minus 1 for dash
-            local max_length=$((63 - ${#prefix} - 1))
-            sanitized_branch=${sanitized_branch:0:$max_length}
-            echo "${prefix}-${sanitized_branch}"
-        fi
-    else
-        # For standard environments, use the environment type
-        echo "${prefix}-${env_type}"
-    fi
+  local env_type="$1"
+  local branch_name="$2"
+  local pr_number="$3"
+  local namespace_name=""
+
+  case "${env_type}" in
+    feature)
+      # For feature branches, use branch name and PR number if available
+      # Convert branch name to valid Kubernetes name: lowercase, alphanumeric, dashes
+      local sanitized_branch=$(echo "${branch_name}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
+      
+      if [[ -n "${pr_number}" ]]; then
+        namespace_name="${NAMESPACE_PREFIX}-feature-pr${pr_number}"
+      else
+        namespace_name="${NAMESPACE_PREFIX}-feature-${sanitized_branch}"
+      fi
+      ;;
+    development)
+      namespace_name="${NAMESPACE_PREFIX}-development"
+      ;;
+    staging)
+      namespace_name="${NAMESPACE_PREFIX}-staging"
+      ;;
+    production)
+      namespace_name="${NAMESPACE_PREFIX}-production"
+      ;;
+    *)
+      log_error "Invalid environment type: ${env_type}"
+      exit 1
+      ;;
+  esac
+
+  # Ensure namespace name is not too long
+  if [[ ${#namespace_name} -gt ${MAX_NAMESPACE_LENGTH} ]]; then
+    # Truncate namespace name if too long
+    namespace_name="${namespace_name:0:$((MAX_NAMESPACE_LENGTH - 8))}-$(echo "${namespace_name}" | md5sum | cut -c1-7)"
+    log_warn "Namespace name was too long and has been truncated to: ${namespace_name}"
+  fi
+
+  echo "${namespace_name}"
 }
 
-# Check if namespace already exists
-namespace_exists() {
-    local namespace=$1
-    kubectl get namespace "$namespace" &> /dev/null
-    return $?
+check_namespace_exists() {
+  local namespace="$1"
+  if kubectl get namespace "${namespace}" &> /dev/null; then
+    return 0  # Namespace exists
+  else
+    return 1  # Namespace does not exist
+  fi
 }
 
-# Create namespace with labels and annotations
+# =============================================================================
+# Namespace creation and configuration
+# =============================================================================
+
 create_namespace() {
-    local namespace=$1
-    local env_type=$2
-    local branch_name=$3
-    local pr_number=$4
-    local cleanup_days=$5
-    
-    local cmd="kubectl create namespace $namespace"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would execute: $cmd"
-    else
-        log_info "Creating namespace: $namespace"
-        eval "$cmd"
-        
-        # Add labels
-        kubectl label namespace "$namespace" "environment=$env_type" --overwrite
-        kubectl label namespace "$namespace" "app.kubernetes.io/part-of=mca-application-system" --overwrite
-        kubectl label namespace "$namespace" "app.kubernetes.io/managed-by=ci-cd" --overwrite
-        
-        # Add annotations
-        kubectl annotate namespace "$namespace" "created-by=create-namespace-script" --overwrite
-        kubectl annotate namespace "$namespace" "creation-timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --overwrite
-        
-        # For feature environments, add cleanup annotation
-        if [[ "$env_type" == "feature" ]]; then
-            local cleanup_date=$(date -u -d "+$cleanup_days days" +"%Y-%m-%dT%H:%M:%SZ")
-            kubectl annotate namespace "$namespace" "cleanup-after=$cleanup_date" --overwrite
-            
-            # Add source information
-            if [[ -n "$branch_name" ]]; then
-                kubectl annotate namespace "$namespace" "source-branch=$branch_name" --overwrite
-            fi
-            if [[ -n "$pr_number" ]]; then
-                kubectl annotate namespace "$namespace" "source-pr=$pr_number" --overwrite
-            fi
-        fi
-        
-        log_success "Namespace created successfully: $namespace"
-    fi
+  local namespace="$1"
+  local env_type="$2"
+  local branch_name="$3"
+  local pr_number="$4"
+
+  log_info "Creating namespace: ${namespace}"
+
+  # Create namespace with appropriate labels and annotations
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${namespace}
+  labels:
+    name: ${namespace}
+    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+    tier: ${env_type}
+    version: "1.0"
+    network-policy: restricted
+    monitoring: enabled
+    logging: enabled
+    tracing: ${env_type == "production" || env_type == "staging" ? "enabled" : "disabled"}
+  annotations:
+    description: "${env_type} environment for MCA Application Processing System"
+    documentation: "https://dollarfunding.com/docs/mca-application-processing"
+    scheduler.alpha.kubernetes.io/node-selector: "env=${env_type},workload=mca"
+    compliance.dollarfunding.com/data-classification: "${env_type == "production" ? "sensitive" : "internal"}"
+    backup.dollarfunding.com/schedule: "${env_type == "production" ? "daily" : env_type == "staging" ? "weekly" : "none"}"
+    backup.dollarfunding.com/retention: "${env_type == "production" ? "7-years" : env_type == "staging" ? "30-days" : "none"}"
+    monitoring.dollarfunding.com/priority: "${env_type == "production" ? "p1" : env_type == "staging" ? "p2" : "p3"}"
+    monitoring.dollarfunding.com/sla: "${env_type == "production" ? "99.9%" : env_type == "staging" ? "99.5%" : "best-effort"}"
+    cost.dollarfunding.com/business-unit: "lending"
+    cost.dollarfunding.com/project: "mca-application-processing"
+    cost.dollarfunding.com/owner: "lending-operations"
+    ci.dollarfunding.com/created-by: "create-namespace.sh"
+    ci.dollarfunding.com/created-at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    ${env_type == "feature" ? "ci.dollarfunding.com/branch: \"${branch_name}\"" : ""}
+    ${pr_number ? "ci.dollarfunding.com/pr-number: \"${pr_number}\"" : ""}
+    ${env_type == "feature" && CLEANUP == "true" ? "ci.dollarfunding.com/auto-cleanup: \"true\"" : ""}
+spec:
+  finalizers:
+  - kubernetes
+EOF
+
+  log_info "Namespace ${namespace} created successfully"
 }
 
-# Apply resource quotas based on environment type
+# =============================================================================
+# Resource quota application
+# =============================================================================
+
 apply_resource_quotas() {
-    local namespace=$1
-    local env_type=$2
+  local namespace="$1"
+  local env_type="$2"
+
+  log_info "Applying resource quotas for namespace: ${namespace}"
+
+  # Determine which resource quota to apply based on environment type
+  local quota_name
+  case "${env_type}" in
+    feature)
+      # For feature branches, use a more restricted quota
+      quota_name="mca-development-quota"  # Reuse development quota but with tighter limits
+      ;;
+    development)
+      quota_name="mca-development-quota"
+      ;;
+    staging)
+      quota_name="mca-staging-quota"
+      ;;
+    production)
+      quota_name="mca-production-quota"
+      ;;
+    *)
+      log_error "Invalid environment type for resource quota: ${env_type}"
+      exit 1
+      ;;
+  esac
+
+  # Extract and apply the appropriate resource quota
+  if [[ -f "${RESOURCE_QUOTA_TEMPLATES}" ]]; then
+    # Extract the specific quota from the template file
+    yq eval "select(.metadata.name == \"${quota_name}\")" "${RESOURCE_QUOTA_TEMPLATES}" > "/tmp/${quota_name}.yaml"
     
-    log_info "Applying resource quotas for $env_type environment"
+    # Update the namespace in the extracted quota
+    yq eval ".metadata.namespace = \"${namespace}\"" -i "/tmp/${quota_name}.yaml"
     
-    local quota_file="/tmp/${namespace}-quota.yaml"
+    # Apply the quota
+    kubectl apply -f "/tmp/${quota_name}.yaml"
     
-    # Create resource quota YAML based on environment type
-    cat > "$quota_file" << EOF
+    # Clean up temporary file
+    rm -f "/tmp/${quota_name}.yaml"
+    
+    log_info "Applied resource quota ${quota_name} to namespace ${namespace}"
+  else
+    log_warn "Resource quota template file not found: ${RESOURCE_QUOTA_TEMPLATES}"
+    log_warn "Skipping resource quota application"
+  fi
+
+  # For feature environments, apply tighter limits
+  if [[ "${env_type}" == "feature" ]]; then
+    # Create a feature-specific resource quota with tighter limits
+    cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: ${namespace}-quota
+  name: feature-environment-quota
   namespace: ${namespace}
+  labels:
+    environment: feature
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Feature environment resource quota with tighter limits"
 spec:
   hard:
-    # Compute Resources
-EOF
-    
-    # Add environment-specific resource limits
-    case "$env_type" in
-        feature)
-            cat >> "$quota_file" << EOF
+    # Compute Resources - more restricted for feature environments
     requests.cpu: "4"
     limits.cpu: "8"
-    requests.memory: 8Gi
-    limits.memory: 16Gi
-    
-    # GPU Resources (for OCR Service)
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    # GPU Resources - limited to 1 for OCR Service
     requests.nvidia.com/gpu: "1"
     limits.nvidia.com/gpu: "1"
-    
     # Storage Resources
-    requests.storage: 50Gi
+    requests.storage: "50Gi"
     persistentvolumeclaims: "10"
-    
     # Object Count Limits
     pods: "30"
     services: "15"
-    configmaps: "20"
-    secrets: "20"
-    
-    # Load Balancer Limits
-    services.loadbalancers: "1"
-EOF
-            ;;
-        development)
-            cat >> "$quota_file" << EOF
-    requests.cpu: "8"
-    limits.cpu: "16"
-    requests.memory: 16Gi
-    limits.memory: 32Gi
-    
-    # GPU Resources (for OCR Service)
-    requests.nvidia.com/gpu: "1"
-    limits.nvidia.com/gpu: "2"
-    
-    # Storage Resources
-    requests.storage: 100Gi
-    persistentvolumeclaims: "20"
-    
-    # Object Count Limits
-    pods: "50"
-    services: "20"
+    services.loadbalancers: "2"
     configmaps: "30"
     secrets: "30"
-    
-    # Load Balancer Limits
-    services.loadbalancers: "1"
+    deployments.apps: "15"
+    statefulsets.apps: "5"
+    jobs.batch: "20"
+    cronjobs.batch: "5"
 EOF
-            ;;
-        staging)
-            cat >> "$quota_file" << EOF
-    requests.cpu: "16"
-    limits.cpu: "32"
-    requests.memory: 32Gi
-    limits.memory: 64Gi
-    
-    # GPU Resources (for OCR Service)
-    requests.nvidia.com/gpu: "2"
-    limits.nvidia.com/gpu: "4"
-    
-    # Storage Resources
-    requests.storage: 200Gi
-    persistentvolumeclaims: "30"
-    
-    # Object Count Limits
-    pods: "75"
-    services: "30"
-    configmaps: "40"
-    secrets: "40"
-    
-    # Load Balancer Limits
-    services.loadbalancers: "2"
-EOF
-            ;;
-        production)
-            cat >> "$quota_file" << EOF
-    requests.cpu: "32"
-    limits.cpu: "64"
-    requests.memory: 64Gi
-    limits.memory: 128Gi
-    
-    # GPU Resources (for OCR Service)
-    requests.nvidia.com/gpu: "4"
-    limits.nvidia.com/gpu: "8"
-    
-    # Storage Resources
-    requests.storage: 500Gi
-    persistentvolumeclaims: "50"
-    
-    # Object Count Limits
-    pods: "100"
-    services: "40"
-    configmaps: "50"
-    secrets: "50"
-    
-    # Load Balancer Limits
-    services.loadbalancers: "3"
-EOF
-            
-            # Add additional production-specific quotas
-            cat >> "$quota_file" << EOF
----
-# Priority Class Quota for Production
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: ${namespace}-priority-quota
-  namespace: ${namespace}
-spec:
-  hard:
-    pods: "50"
-  scopeSelector:
-    matchExpressions:
-    - operator: In
-      scopeName: PriorityClass
-      values: 
-      - high-priority
-      - critical-priority
----
-# Storage Class Quota for Production
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: ${namespace}-storage-quota
-  namespace: ${namespace}
-spec:
-  hard:
-    ssd.storageclass.storage.k8s.io/requests.storage: 200Gi
-    standard.storageclass.storage.k8s.io/requests.storage: 300Gi
-EOF
-            ;;
-    esac
-    
-    # Apply the resource quota
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would apply resource quotas from: $quota_file"
-        cat "$quota_file"
-    else
-        kubectl apply -f "$quota_file"
-        log_success "Resource quotas applied successfully"
-    fi
-    
-    # Clean up temporary file
-    rm -f "$quota_file"
+    log_info "Applied feature-specific resource quota to namespace ${namespace}"
+  fi
 }
 
-# Apply default network policies
+# =============================================================================
+# Network policy configuration
+# =============================================================================
+
 apply_network_policies() {
-    local namespace=$1
-    
-    log_info "Applying network policies for namespace: $namespace"
-    
-    local policy_file="/tmp/${namespace}-network-policy.yaml"
-    
-    # Create default deny-all policy
-    cat > "$policy_file" << EOF
-# Default Deny All Network Policy
-# This policy ensures that any traffic not explicitly allowed by other policies is denied
+  local namespace="$1"
+  local env_type="$2"
+
+  log_info "Applying network policies for namespace: ${namespace}"
+
+  # Default deny all ingress and egress traffic
+  cat <<EOF | kubectl apply -f -
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/component: security
-    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Default deny all ingress and egress traffic"
 spec:
-  podSelector: {}  # Selects all pods in the namespace
+  podSelector: {}
   policyTypes:
   - Ingress
   - Egress
-  # No ingress or egress rules means all traffic is denied by default
----
-# DNS Access Policy
-# This policy allows all pods to access DNS services
+EOF
+
+  # Allow DNS resolution
+  cat <<EOF | kubectl apply -f -
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns-access
+  name: allow-dns-resolution
   namespace: ${namespace}
   labels:
-    app.kubernetes.io/component: security
-    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow DNS resolution"
 spec:
   podSelector: {}
   policyTypes:
   - Egress
   egress:
   - to:
-    - namespaceSelector: {}
-      podSelector:
+    - namespaceSelector:
         matchLabels:
-          k8s-app: kube-dns
+          name: kube-system
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
 EOF
-    
-    # Apply the network policies
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would apply network policies from: $policy_file"
-        cat "$policy_file"
-    else
-        kubectl apply -f "$policy_file"
-        log_success "Network policies applied successfully"
-    fi
-    
-    # Clean up temporary file
-    rm -f "$policy_file"
+
+  # Allow intra-namespace communication
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow communication between pods in the same namespace"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector: {}
+EOF
+
+  # Allow ingress from API Gateway
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-gateway-ingress
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow ingress from API Gateway"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mca-application-processing
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: api-gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: api-gateway
+EOF
+
+  # Allow egress to RabbitMQ
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-rabbitmq-egress
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow egress to RabbitMQ"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mca-application-processing
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: rabbitmq
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: rabbitmq
+    ports:
+    - protocol: TCP
+      port: 5672
+EOF
+
+  # Allow egress to PostgreSQL
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-egress
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow egress to PostgreSQL"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mca-application-processing
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: postgresql
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+EOF
+
+  # Allow egress to Redis
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-egress
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow egress to Redis"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mca-application-processing
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: redis
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+EOF
+
+  # Allow egress to S3 storage (via proxy or direct)
+  cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-s3-egress
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Allow egress to S3 storage"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mca-application-processing
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: s3-proxy
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: s3-proxy
+EOF
+
+  log_info "Applied network policies to namespace ${namespace}"
 }
 
-# Create service accounts and RBAC configuration
-setup_rbac() {
-    local namespace=$1
-    local env_type=$2
-    
-    log_info "Setting up RBAC for namespace: $namespace"
-    
-    local rbac_file="/tmp/${namespace}-rbac.yaml"
-    
-    # Create service accounts for all microservices
-    cat > "$rbac_file" << EOF
-# Service Accounts for MCA Application Processing System
+# =============================================================================
+# RBAC configuration
+# =============================================================================
+
+apply_rbac() {
+  local namespace="$1"
+  local env_type="$2"
+
+  log_info "Applying RBAC configuration for namespace: ${namespace}"
+
+  # Create service accounts for each microservice
+  for service in "email-service" "document-service" "ocr-service" "data-service" "notification-service" "api-gateway"; do
+    cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: email-service
+  name: ${service}
   namespace: ${namespace}
   labels:
-    app: email-service
-    environment: ${env_type}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: document-service
-  namespace: ${namespace}
-  labels:
-    app: document-service
-    environment: ${env_type}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ocr-service
-  namespace: ${namespace}
-  labels:
-    app: ocr-service
-    environment: ${env_type}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: data-service
-  namespace: ${namespace}
-  labels:
-    app: data-service
-    environment: ${env_type}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: notification-service
-  namespace: ${namespace}
-  labels:
-    app: notification-service
-    environment: ${env_type}
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: api-gateway
-  namespace: ${namespace}
-  labels:
-    app: api-gateway
-    environment: ${env_type}
----
-# Default Role for all services
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/component: ${service}
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Service account for ${service}"
+EOF
+  done
+
+  # Create roles for each service type
+  # Email Service Role
+  cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: service-role
+  name: email-service-role
   namespace: ${namespace}
   labels:
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
 rules:
-- apiGroups: [""] 
-  resources: ["configmaps", "secrets"]
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["email-service-config"]
   verbs: ["get", "list", "watch"]
----
-# Role Binding for all service accounts
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to email credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["email-credentials"]
+  verbs: ["get"]
+EOF
+
+  # Document Service Role
+  cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: document-service-role
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["document-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to S3 storage credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["s3-credentials"]
+  verbs: ["get"]
+# Access to ML model configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["document-classification-models"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+  # OCR Service Role
+  cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ocr-service-role
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["ocr-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to S3 storage credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["s3-credentials"]
+  verbs: ["get"]
+# Access to TensorFlow model configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["ocr-models"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+  # Data Service Role
+  cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: data-service-role
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["data-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to database credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["postgresql-credentials"]
+  verbs: ["get"]
+# Access to Redis credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["redis-credentials"]
+  verbs: ["get"]
+# Access to encryption keys for PII
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["field-encryption-keys"]
+  verbs: ["get"]
+EOF
+
+  # Notification Service Role
+  cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: notification-service-role
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["notification-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to webhook configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["webhook-configurations"]
+  verbs: ["get", "list", "watch"]
+# Access to webhook signing keys
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["webhook-signing-keys"]
+  verbs: ["get"]
+EOF
+
+  # API Gateway Role
+  cat <<EOF | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-gateway-role
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["api-gateway-config"]
+  verbs: ["get", "list", "watch"]
+# Access to TLS certificates
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["api-gateway-tls"]
+  verbs: ["get"]
+# Access to JWT public keys for validation
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["jwt-public-keys"]
+  verbs: ["get"]
+# Access to service discovery
+- apiGroups: [""] # Core API group
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+  # Create role bindings for each service
+  for service in "email-service" "document-service" "ocr-service" "data-service" "notification-service" "api-gateway"; do
+    cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: service-role-binding
+  name: ${service}-binding
   namespace: ${namespace}
   labels:
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
 subjects:
 - kind: ServiceAccount
-  name: email-service
-  namespace: ${namespace}
-- kind: ServiceAccount
-  name: document-service
-  namespace: ${namespace}
-- kind: ServiceAccount
-  name: ocr-service
-  namespace: ${namespace}
-- kind: ServiceAccount
-  name: data-service
-  namespace: ${namespace}
-- kind: ServiceAccount
-  name: notification-service
-  namespace: ${namespace}
-- kind: ServiceAccount
-  name: api-gateway
+  name: ${service}
   namespace: ${namespace}
 roleRef:
   kind: Role
-  name: service-role
+  name: ${service}-role
   apiGroup: rbac.authorization.k8s.io
 EOF
-    
-    # Add environment-specific roles if needed
-    if [[ "$env_type" == "production" || "$env_type" == "staging" ]]; then
-        cat >> "$rbac_file" << EOF
----
-# Operations Staff Role
+  done
+
+  # Create roles for user types as specified in section 0.1.3
+  # Operations Staff Role - Read all, write application data
+  cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: operations-staff
+  name: operations-staff-role
   namespace: ${namespace}
   labels:
-    role: operations-staff
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Role for Operations Staff with permissions to read all and write application data"
 rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps"]
+# Read access to all resources
+- apiGroups: [""] # Core API group
+  resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
   verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
+# Write access to application data resources
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["application-data", "document-metadata"]
+  verbs: ["update", "patch"]
+# Access to logs
+- apiGroups: [""] # Core API group
   resources: ["pods/log"]
   verbs: ["get", "list"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["application-data-*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-# System Admin Role
+# Access to application-specific custom resources
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["applications", "documents"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+EOF
+
+  # System Admin Role - Full access to all endpoints and webhook configuration
+  cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: system-admin
+  name: system-admin-role
   namespace: ${namespace}
   labels:
-    role: system-admin
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+  annotations:
+    description: "Role for System Admin with full access to all endpoints and webhook configuration"
 rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps", "secrets", "namespaces", "persistentvolumeclaims"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""] 
-  resources: ["pods/log", "pods/exec"]
-  verbs: ["get", "list", "create"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles", "rolebindings"]
-  verbs: ["get", "list", "watch"]
----
-# Operations Staff RoleBinding
+# Full access to all resources in the namespace
+- apiGroups: [""] # Core API group
+  resources: ["*"]
+  verbs: ["*"]
+# Full access to all custom resources
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["*"]
+  verbs: ["*"]
+# Full access to webhook configuration
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["webhooks", "webhookconfigurations"]
+  verbs: ["*"]
+# Access to Kong API Gateway configuration
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongplugins", "kongconsumers", "kongingresses"]
+  verbs: ["*"]
+EOF
+
+  # Create role bindings for user roles
+  # Operations Staff RoleBinding
+  cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: operations-staff-binding
   namespace: ${namespace}
   labels:
-    role: operations-staff
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
 subjects:
+# This is where user identities would be bound to the role
+# For JWT authentication, this would be managed by an authentication proxy
+# that maps JWT claims to Kubernetes RBAC
 - kind: Group
   name: operations-staff
   apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: Role
-  name: operations-staff
+  name: operations-staff-role
   apiGroup: rbac.authorization.k8s.io
----
-# System Admin RoleBinding
+EOF
+
+  # System Admin RoleBinding
+  cat <<EOF | kubectl apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: system-admin-binding
   namespace: ${namespace}
   labels:
-    role: system-admin
-    environment: ${env_type}
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
 subjects:
+# This is where user identities would be bound to the role
+# For JWT authentication, this would be managed by an authentication proxy
+# that maps JWT claims to Kubernetes RBAC
 - kind: Group
-  name: system-admin
+  name: system-admins
   apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: Role
-  name: system-admin
+  name: system-admin-role
   apiGroup: rbac.authorization.k8s.io
 EOF
-    fi
-    
-    # Apply the RBAC configuration
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would apply RBAC configuration from: $rbac_file"
-        cat "$rbac_file"
-    else
-        kubectl apply -f "$rbac_file"
-        log_success "RBAC configuration applied successfully"
-    fi
-    
-    # Clean up temporary file
-    rm -f "$rbac_file"
+
+  log_info "Applied RBAC configuration to namespace ${namespace}"
 }
 
-# Setup cleanup hooks for ephemeral environments
-setup_cleanup_hooks() {
-    local namespace=$1
-    local cleanup_days=$2
-    
-    log_info "Setting up cleanup hooks for ephemeral environment: $namespace"
-    
-    # For feature environments, create a cleanup job
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would create cleanup job for namespace: $namespace after $cleanup_days days"
-    else
-        # Create a Kubernetes CronJob to check for namespaces that need cleanup
-        # This is typically done at the cluster level, not per namespace
-        # Here we're just setting the annotation that the cleanup job will look for
-        local cleanup_date=$(date -u -d "+$cleanup_days days" +"%Y-%m-%dT%H:%M:%SZ")
-        kubectl annotate namespace "$namespace" "cleanup-after=$cleanup_date" --overwrite
-        log_success "Cleanup hook set for namespace: $namespace (cleanup after: $cleanup_date)"
-    fi
+# =============================================================================
+# Cleanup hooks
+# =============================================================================
+
+add_cleanup_hooks() {
+  local namespace="$1"
+  local env_type="$2"
+  local branch_name="$3"
+  local pr_number="$4"
+
+  # Only add cleanup hooks for feature environments
+  if [[ "${env_type}" != "feature" || "${CLEANUP}" != "true" ]]; then
+    log_debug "Skipping cleanup hooks for ${env_type} environment or cleanup disabled"
+    return 0
+  fi
+
+  log_info "Adding cleanup hooks for namespace: ${namespace}"
+
+  # Create a ConfigMap to store cleanup information
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cleanup-info
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/part-of: mca-application-processing
+    app.kubernetes.io/managed-by: ci-pipeline
+    cleanup: "true"
+  annotations:
+    description: "Cleanup information for feature environment"
+    ci.dollarfunding.com/branch: "${branch_name}"
+    ci.dollarfunding.com/pr-number: "${pr_number:-none}"
+    ci.dollarfunding.com/created-at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    ci.dollarfunding.com/cleanup-policy: "pr-closed"
+data:
+  branch: "${branch_name}"
+  pr-number: "${pr_number:-none}"
+  created-at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  cleanup-policy: "pr-closed"
+  ttl-hours: "168"  # 7 days TTL for feature environments
+EOF
+
+  # Create a CronJob to check if the PR is closed and delete the namespace if it is
+  # Note: This would typically be handled by a central cleanup service monitoring all namespaces
+  # For demonstration purposes, we're showing what such a job might look like
+  log_info "Cleanup hooks added for namespace ${namespace}"
+  log_info "Note: Actual cleanup will be performed by the CI/CD system when the PR is closed"
 }
 
+# =============================================================================
 # Main execution
+# =============================================================================
 
-# Generate the namespace name
-NAMESPACE=$(generate_namespace_name "$ENV_TYPE" "$BRANCH_NAME" "$PR_NUMBER" "$NAMESPACE_PREFIX")
-log_info "Generated namespace name: $NAMESPACE"
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env-type)
+      ENV_TYPE="$2"
+      shift 2
+      ;;
+    --branch-name)
+      BRANCH_NAME="$2"
+      shift 2
+      ;;
+    --pr-number)
+      PR_NUMBER="$2"
+      shift 2
+      ;;
+    --cleanup)
+      CLEANUP="$2"
+      shift 2
+      ;;
+    --help)
+      show_help
+      ;;
+    --debug)
+      DEBUG="true"
+      shift
+      ;;
+    *)
+      log_error "Unknown option: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+# Validate input parameters
+validate_input
+
+# Check dependencies
+check_dependencies
+
+# Generate namespace name
+NAMESPACE=$(generate_namespace_name "${ENV_TYPE}" "${BRANCH_NAME}" "${PR_NUMBER}")
 
 # Check if namespace already exists
-if namespace_exists "$NAMESPACE"; then
-    log_warning "Namespace already exists: $NAMESPACE"
+if check_namespace_exists "${NAMESPACE}"; then
+  log_warn "Namespace ${NAMESPACE} already exists"
+  
+  # For feature environments, we might want to recreate it
+  if [[ "${ENV_TYPE}" == "feature" ]]; then
+    log_info "Recreating feature environment namespace: ${NAMESPACE}"
+    kubectl delete namespace "${NAMESPACE}" --wait=true
     
-    # For feature environments, we can update the cleanup date
-    if [[ "$ENV_TYPE" == "feature" && "$DRY_RUN" != "true" ]]; then
-        local cleanup_date=$(date -u -d "+$CLEANUP_DAYS days" +"%Y-%m-%dT%H:%M:%SZ")
-        kubectl annotate namespace "$NAMESPACE" "cleanup-after=$cleanup_date" --overwrite
-        log_info "Updated cleanup date for namespace: $NAMESPACE (cleanup after: $cleanup_date)"
-    fi
-else
-    # Create the namespace
-    create_namespace "$NAMESPACE" "$ENV_TYPE" "$BRANCH_NAME" "$PR_NUMBER" "$CLEANUP_DAYS"
-    
-    # Apply resource quotas
-    apply_resource_quotas "$NAMESPACE" "$ENV_TYPE"
-    
-    # Apply network policies
-    apply_network_policies "$NAMESPACE"
-    
-    # Setup RBAC
-    setup_rbac "$NAMESPACE" "$ENV_TYPE"
-    
-    # For feature environments, setup cleanup hooks
-    if [[ "$ENV_TYPE" == "feature" ]]; then
-        setup_cleanup_hooks "$NAMESPACE" "$CLEANUP_DAYS"
-    fi
+    # Wait for namespace to be fully deleted
+    while check_namespace_exists "${NAMESPACE}"; do
+      log_info "Waiting for namespace ${NAMESPACE} to be deleted..."
+      sleep 5
+    done
+  else
+    log_info "Using existing namespace: ${NAMESPACE}"
+    exit 0
+  fi
 fi
 
-# Output the namespace name for use in subsequent steps
-echo "NAMESPACE=$NAMESPACE"
+# Create namespace
+create_namespace "${NAMESPACE}" "${ENV_TYPE}" "${BRANCH_NAME}" "${PR_NUMBER}"
 
-log_success "Namespace setup completed successfully: $NAMESPACE"
+# Apply resource quotas
+apply_resource_quotas "${NAMESPACE}" "${ENV_TYPE}"
+
+# Apply network policies
+apply_network_policies "${NAMESPACE}" "${ENV_TYPE}"
+
+# Apply RBAC configuration
+apply_rbac "${NAMESPACE}" "${ENV_TYPE}"
+
+# Add cleanup hooks for feature environments
+if [[ "${ENV_TYPE}" == "feature" && "${CLEANUP}" == "true" ]]; then
+  add_cleanup_hooks "${NAMESPACE}" "${ENV_TYPE}" "${BRANCH_NAME}" "${PR_NUMBER}"
+fi
+
+log_info "Namespace ${NAMESPACE} has been successfully created and configured"
+
+# Output the namespace name for use by other scripts
+echo "${NAMESPACE}"
+
 exit 0
