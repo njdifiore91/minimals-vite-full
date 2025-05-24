@@ -1,34 +1,102 @@
-# Node.js Microservice CI/CD Template
-# Used for Email Service and Notification Service
-# Requires Node.js v22.x (LTS)
+# Node.js Microservice CI/CD Workflow Template
+# This template defines a standardized CI/CD pipeline for Node.js microservices
+# including Email Service and Notification Service.
 #
-# This template defines a standardized CI/CD workflow for Node.js microservices with the following features:
-# - Support for both npm and yarn package managers with automatic detection
-# - Code quality checks with ESLint and TypeScript
-# - Unit testing with Jest and coverage reporting
-# - Vulnerability scanning for dependencies and container images
-# - Multi-stage Docker builds to minimize image size
+# Features:
+# - Node.js v22.x LTS support
+# - npm/yarn dependency management
+# - ESLint code quality checks with TypeScript support
+# - Jest unit testing with coverage reporting
+# - Docker multi-stage builds
+# - Trivy security scanning
 # - Kubernetes deployment with Helm charts
-# - Post-deployment health checks with service-specific validations
+# - Post-deployment health checks
+# - Automatic rollback on deployment failure
+#
+# Usage:
+# This template can be referenced from service-specific workflow files:
+#
+# ```yaml
+# # email-service/build.yml
+# name: Email Service CI/CD
+#
+# on:
+#   workflow_call:
+#     inputs:
+#       environment:
+#         type: string
+#         default: 'development'
+#
+# jobs:
+#   ci-cd:
+#     uses: ./.github/workflows/templates/node-service.yml
+#     with:
+#       service_name: email-service
+#       node_version: 22.x
+#       package_manager: npm
+#     secrets: inherit
+# ```
+#
+# Required secrets:
+# - REGISTRY_USERNAME: Username for container registry
+# - REGISTRY_PASSWORD: Password for container registry
+# - KUBECONFIG_{environment}: Kubeconfig for each environment (e.g., KUBECONFIG_development)
 
-name: Node.js Service CI/CD Pipeline
+name: Node.js Microservice CI/CD
 
+# Parameters that can be customized when using this template
+parameters:
+  # Required parameters
+  service_name:
+    type: string
+    description: "Name of the microservice (e.g., email-service, notification-service)"
+  
+  # Optional parameters with defaults
+  node_version:
+    type: string
+    description: "Node.js version to use"
+    default: "22.x"
+  package_manager:
+    type: string
+    description: "Package manager to use (npm or yarn)"
+    default: "npm"
+  registry:
+    type: string
+    description: "Container registry to push images to"
+    default: "${DOCKER_REGISTRY}"
+  test_coverage_threshold:
+    type: number
+    description: "Minimum test coverage percentage required"
+    default: 80
+  environments:
+    type: array
+    description: "Deployment environments"
+    default: ["development", "staging", "production"]
+  helm_chart_path:
+    type: string
+    description: "Path to the Helm chart for deployment"
+    default: "infrastructure/kubernetes/charts/${service_name}"
+  dockerfile_path:
+    type: string
+    description: "Path to the Dockerfile"
+    default: "${service_name}/Dockerfile"
+
+# Trigger configuration
 on:
   push:
-    branches: [ main, development ]
+    branches: [main, development]
     paths:
-      - 'email-service/**'
-      - 'notification-service/**'
-      - 'infrastructure/ci/services/templates/node-service.yml'
+      - '${service_name}/**'
+      - 'infrastructure/kubernetes/charts/${service_name}/**'
   pull_request:
-    branches: [ main ]
+    branches: [main, development]
     paths:
-      - 'email-service/**'
-      - 'notification-service/**'
+      - '${service_name}/**'
+      - 'infrastructure/kubernetes/charts/${service_name}/**'
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Deployment Environment'
+        description: 'Environment to deploy to'
         required: true
         default: 'development'
         type: choice
@@ -36,337 +104,319 @@ on:
           - development
           - staging
           - production
-      service:
-        description: 'Service to deploy'
-        required: true
-        type: choice
-        options:
-          - email-service
-          - notification-service
 
-# Global environment variables
+# Environment variables
 env:
-  NODE_VERSION: '22.x'
-  NPM_VERSION: '10.2.4'
-  YARN_VERSION: '4.1.0'
-  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
-  TRIVY_SEVERITY: 'HIGH,CRITICAL'
-  # Default to npm, but allow services to use yarn if they have a yarn.lock file
-  PACKAGE_MANAGER: 'npm'
+  SERVICE_NAME: ${service_name}
+  NODE_VERSION: ${node_version}
+  PACKAGE_MANAGER: ${package_manager}
+  REGISTRY: ${registry}
+  TEST_COVERAGE_THRESHOLD: ${test_coverage_threshold}
+  HELM_CHART_PATH: ${helm_chart_path}
+  DOCKERFILE_PATH: ${dockerfile_path}
 
+# Workflow jobs
 jobs:
-  # Determine which service directory has changed
-  changes:
-    name: Detect Service Changes
+  # Build job - handles dependency installation, testing, and image building
+  build:
+    name: Build and Test
     runs-on: ubuntu-latest
-    outputs:
-      email_service: ${{ steps.filter.outputs.email_service }}
-      notification_service: ${{ steps.filter.outputs.notification_service }}
-      service_name: ${{ steps.set-service.outputs.service_name }}
     steps:
-      - name: Checkout Repository
+      # Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Filter for service changes
-        uses: dorny/paths-filter@v2
-        id: filter
         with:
-          filters: |
-            email_service:
-              - 'email-service/**'
-            notification_service:
-              - 'notification-service/**'
-
-      - name: Set service name from changes
-        id: set-service
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "service_name=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.filter.outputs.email_service }}" == "true" ]]; then
-            echo "service_name=email-service" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.filter.outputs.notification_service }}" == "true" ]]; then
-            echo "service_name=notification-service" >> $GITHUB_OUTPUT
-          else
-            echo "No service changes detected"
-            exit 1
-          fi
-
-  # Code quality and testing
-  quality:
-    name: Code Quality & Testing
-    needs: changes
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
+          fetch-depth: 0
+      
+      # Setup Node.js environment
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: ${{ matrix.service }}/package-lock.json
-
-      - name: Determine package manager
-        id: pkg-manager
-        working-directory: ${{ matrix.service }}
+          cache: ${{ env.PACKAGE_MANAGER }}
+          cache-dependency-path: ${{ env.SERVICE_NAME }}/package-lock.json
+      
+      # Install dependencies
+      - name: Install dependencies
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          if [ -f "yarn.lock" ]; then
-            echo "Using Yarn package manager"
-            echo "manager=yarn" >> $GITHUB_OUTPUT
+          if [ "${{ env.PACKAGE_MANAGER }}" == "yarn" ]; then
+            yarn install --frozen-lockfile
           else
-            echo "Using NPM package manager"
-            echo "manager=npm" >> $GITHUB_OUTPUT
+            npm ci
           fi
-
-      - name: Install dependencies with npm
-        if: steps.pkg-manager.outputs.manager == 'npm'
-        working-directory: ${{ matrix.service }}
-        run: npm ci
-
-      - name: Install dependencies with yarn
-        if: steps.pkg-manager.outputs.manager == 'yarn'
-        working-directory: ${{ matrix.service }}
+      
+      # Lint code
+      - name: Lint code
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          corepack enable
-          yarn install --immutable
-
-      - name: Lint with ESLint
-        working-directory: ${{ matrix.service }}
-        run: |
-          if [ "${{ steps.pkg-manager.outputs.manager }}" == "yarn" ]; then
+          if [ "${{ env.PACKAGE_MANAGER }}" == "yarn" ]; then
             yarn lint
           else
             npm run lint
           fi
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096 # Increase memory for TypeScript linting
-
-      - name: Type check with TypeScript
-        working-directory: ${{ matrix.service }}
+      
+      # Type check (if TypeScript)
+      - name: Type check
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          if [ "${{ steps.pkg-manager.outputs.manager }}" == "yarn" ]; then
-            yarn type-check
-          else
-            npm run type-check
+          if [ -f "tsconfig.json" ]; then
+            if [ "${{ env.PACKAGE_MANAGER }}" == "yarn" ]; then
+              yarn tsc --noEmit
+            else
+              npm run tsc -- --noEmit
+            fi
           fi
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096 # Increase memory for TypeScript checking
-
-      - name: Test with Jest
-        working-directory: ${{ matrix.service }}
+      
+      # Run tests with coverage
+      - name: Run tests
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          if [ "${{ steps.pkg-manager.outputs.manager }}" == "yarn" ]; then
+          if [ "${{ env.PACKAGE_MANAGER }}" == "yarn" ]; then
             yarn test --coverage
           else
             npm test -- --coverage
           fi
-        env:
-          NODE_ENV: test
-          # Add any environment variables needed for testing
-
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v3
-        with:
-          file: ${{ matrix.service }}/coverage/lcov.info
-          flags: ${{ matrix.service }}
-          name: ${{ matrix.service }}-coverage
-
-      - name: Check for npm vulnerabilities
-        if: steps.pkg-manager.outputs.manager == 'npm'
-        working-directory: ${{ matrix.service }}
-        run: npm audit --production --audit-level=high
-        continue-on-error: true # Don't fail the build, but report vulnerabilities
-
-      - name: Check for yarn vulnerabilities
-        if: steps.pkg-manager.outputs.manager == 'yarn'
-        working-directory: ${{ matrix.service }}
-        run: yarn npm audit --environment production --level high
-        continue-on-error: true # Don't fail the build, but report vulnerabilities
-
-  # Build and package
-  build:
-    name: Build and Package
-    needs: [changes, quality]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: ${{ matrix.service }}/package-lock.json
-
-      - name: Determine package manager
-        id: pkg-manager
-        working-directory: ${{ matrix.service }}
+      
+      # Check test coverage
+      - name: Check test coverage
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          if [ -f "yarn.lock" ]; then
-            echo "Using Yarn package manager"
-            echo "manager=yarn" >> $GITHUB_OUTPUT
-          else
-            echo "Using NPM package manager"
-            echo "manager=npm" >> $GITHUB_OUTPUT
+          COVERAGE=$(cat coverage/coverage-summary.json | jq -r '.total.lines.pct')
+          if (( $(echo "$COVERAGE < ${{ env.TEST_COVERAGE_THRESHOLD }}" | bc -l) )); then
+            echo "Test coverage is below threshold: $COVERAGE% < ${{ env.TEST_COVERAGE_THRESHOLD }}%"
+            exit 1
           fi
-
-      - name: Install dependencies with npm
-        if: steps.pkg-manager.outputs.manager == 'npm'
-        working-directory: ${{ matrix.service }}
-        run: npm ci
-
-      - name: Install dependencies with yarn
-        if: steps.pkg-manager.outputs.manager == 'yarn'
-        working-directory: ${{ matrix.service }}
-        run: |
-          corepack enable
-          yarn install --immutable
-
+      
+      # Upload test coverage as artifact
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ env.SERVICE_NAME }}/coverage
+      
+      # Build application
       - name: Build application
-        working-directory: ${{ matrix.service }}
+        working-directory: ${{ env.SERVICE_NAME }}
         run: |
-          if [ "${{ steps.pkg-manager.outputs.manager }}" == "yarn" ]; then
+          if [ "${{ env.PACKAGE_MANAGER }}" == "yarn" ]; then
             yarn build
           else
             npm run build
           fi
-        env:
-          NODE_ENV: production
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v3
+      
+      # Generate version tag
+      - name: Generate version tag
+        id: version
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//-/g')
+          VERSION_TAG="${BRANCH_NAME}-${COMMIT_SHA}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION_TAG=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION_TAG" >> $GITHUB_OUTPUT
+      
+      # Build Docker image
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
         with:
-          name: ${{ matrix.service }}-build
-          path: ${{ matrix.service }}/dist
-          retention-days: 7
-
-      # Set up Docker Buildx for multi-platform builds
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Container Registry
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
+          push: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/${{ env.SERVICE_NAME }}-image.tar
+      
+      # Save Docker image as artifact
+      - name: Save Docker image
+        run: |
+          docker save ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }} > /tmp/${{ env.SERVICE_NAME }}-image.tar
+      
+      # Scan Docker image for vulnerabilities
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          input: /tmp/${{ env.SERVICE_NAME }}-image.tar
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+      
+      # Login to container registry
+      - name: Login to container registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      # Extract version from package.json
-      - name: Extract version
-        id: version
-        working-directory: ${{ matrix.service }}
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
-
-      # Build and push Docker image with multi-stage build
-      - name: Build and push Docker image
+      
+      # Push Docker image
+      - name: Push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.service }}
-          file: ${{ matrix.service }}/Dockerfile
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ matrix.service }}:latest
-            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
           build-args: |
             NODE_VERSION=${{ env.NODE_VERSION }}
-            NODE_ENV=production
-            PACKAGE_MANAGER=${{ steps.pkg-manager.outputs.manager }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.service }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.service }}:buildcache,mode=max
-
-      # Scan container image for vulnerabilities
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      # Store version for later jobs
+      - name: Store version
+        uses: actions/upload-artifact@v4
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: ${{ env.TRIVY_SEVERITY }}
+          name: version
+          path: ${{ steps.version.outputs.version }}
+          retention-days: 1
 
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v2
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # Deploy to Kubernetes
+  # Deploy job - handles deployment to Kubernetes
   deploy:
-    name: Deploy to Kubernetes
-    needs: [changes, build]
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+    name: Deploy to ${{ matrix.environment }}
+    needs: build
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}
     strategy:
       matrix:
-        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+        environment: ${{ fromJson(env.ENVIRONMENTS) }}
+    environment: ${{ matrix.environment }}
     steps:
-      - name: Checkout Repository
+      # Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      # Extract version from previous job
-      - name: Set environment variables
+      
+      # Download version from build job
+      - name: Download version
+        uses: actions/download-artifact@v4
+        with:
+          name: version
+          path: /tmp
+      
+      # Set version
+      - name: Set version
+        id: version
         run: |
-          echo "ENVIRONMENT=${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}" >> $GITHUB_ENV
-
-      # Configure kubectl
-      - name: Configure kubectl
+          VERSION=$(cat /tmp/version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      # Setup kubectl
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      # Setup Helm
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      # Configure Kubernetes context
+      - name: Configure Kubernetes context
         uses: azure/k8s-set-context@v3
         with:
           method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }}
-
-      # Install Helm
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'v3.13.3'
-
+          kubeconfig: ${{ secrets[format('KUBECONFIG_{0}', matrix.environment)] }}
+      
       # Deploy with Helm
-      - name: Deploy to Kubernetes with Helm
+      - name: Deploy with Helm
         run: |
-          # Get the image tag from the build job
-          IMAGE_TAG=$(git rev-parse --short HEAD)
-          SERVICE_VERSION=$(node -p "require('./${{ matrix.service }}/package.json').version")
-          
-          # Deploy using Helm
-          helm upgrade --install ${{ matrix.service }}-${{ env.ENVIRONMENT }} \
-            ./infrastructure/kubernetes/charts/${{ matrix.service }} \
-            --namespace ${{ env.ENVIRONMENT }} \
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ matrix.environment }} \
             --create-namespace \
-            --set image.repository=${{ env.REGISTRY }}/${{ matrix.service }} \
-            --set image.tag=${SERVICE_VERSION}-${IMAGE_TAG} \
-            --set environment=${{ env.ENVIRONMENT }} \
-            --values ./infrastructure/kubernetes/charts/${{ matrix.service }}/values-${{ env.ENVIRONMENT }}.yaml
-
+            --set image.repository=${{ env.REGISTRY }}/${{ env.SERVICE_NAME }} \
+            --set image.tag=${{ steps.version.outputs.version }} \
+            --set environment=${{ matrix.environment }} \
+            --values ${{ env.HELM_CHART_PATH }}/values-${{ matrix.environment }}.yaml \
+            --atomic \
+            --timeout 5m
+      
       # Verify deployment
       - name: Verify deployment
         run: |
-          # Wait for deployment to be ready
-          kubectl rollout status deployment/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} --timeout=300s
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ matrix.environment }} --timeout=300s
+      
+      # Run post-deployment health checks
+      - name: Run health checks
+        run: |
+          # Wait for pods to be ready
+          sleep 30
           
-          # Wait for service to stabilize
-          sleep 15
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ matrix.environment }} -l app=${{ env.SERVICE_NAME }} -o jsonpath="{.items[0].metadata.name}")
           
-          # Check if service is healthy with Node.js specific health check
-          kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8000/health | grep -q '"status":"UP"'
+          # Check health endpoint
+          HEALTH_STATUS=$(kubectl exec $POD_NAME -n ${{ matrix.environment }} -- curl -s http://localhost:3000/health | jq -r '.status')
           
-          # Check for specific service health indicators
-          if [[ "${{ matrix.service }}" == "email-service" ]]; then
-            # Verify email service can connect to IMAP
-            kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8000/health/imap | grep -q '"status":"connected"'
-          elif [[ "${{ matrix.service }}" == "notification-service" ]]; then
-            # Verify notification service can connect to RabbitMQ
-            kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8000/health/rabbitmq | grep -q '"status":"connected"'
+          if [ "$HEALTH_STATUS" != "ok" ]; then
+            echo "Health check failed: $HEALTH_STATUS"
+            exit 1
           fi
           
-          echo "Deployment of ${{ matrix.service }} to ${{ env.ENVIRONMENT }} completed successfully"
+          echo "Health check passed: $HEALTH_STATUS"
+      
+      # Send deployment notification
+      - name: Send deployment notification
+        uses: ./.github/actions/notification
+        with:
+          event: deployment
+          service: ${{ env.SERVICE_NAME }}
+          environment: ${{ matrix.environment }}
+          status: success
+          version: ${{ steps.version.outputs.version }}
+
+  # Rollback job - handles rollback in case of deployment failure
+  rollback:
+    name: Rollback ${{ matrix.environment }}
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: failure()
+    strategy:
+      matrix:
+        environment: ${{ fromJson(env.ENVIRONMENTS) }}
+    environment: ${{ matrix.environment }}
+    steps:
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Setup kubectl
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      # Setup Helm
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      # Configure Kubernetes context
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets[format('KUBECONFIG_{0}', matrix.environment)] }}
+      
+      # Rollback Helm release
+      - name: Rollback Helm release
+        run: |
+          helm rollback ${{ env.SERVICE_NAME }} 0 -n ${{ matrix.environment }}
+      
+      # Send rollback notification
+      - name: Send rollback notification
+        uses: ./.github/actions/notification
+        with:
+          event: rollback
+          service: ${{ env.SERVICE_NAME }}
+          environment: ${{ matrix.environment }}
+          status: success
