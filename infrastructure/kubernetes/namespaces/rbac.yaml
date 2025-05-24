@@ -1,1119 +1,537 @@
-# Role-Based Access Control (RBAC) configuration for MCA Application Processing System
-# This file defines ServiceAccounts, Roles, and RoleBindings for all microservices
-# across development, staging, and production namespaces.
+# RBAC Configuration for MCA Application Processing System
+# This file defines Role-Based Access Control policies across all namespaces
+# Implements security requirements from Technical Specification section 3.8
 
 ---
 # ServiceAccounts for each microservice
-# Email Service
+# These accounts provide identity for processes running in pods
+# Follows principle of least privilege as specified in section 3.8.4
+
+# Email Service ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: email-service
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: email-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: email-service
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for Email Service that monitors submissions inbox using IMAP protocol"
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: email-service
-  namespace: staging
-  labels:
-    app: email-service
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: email-service
-  namespace: production
-  labels:
-    app: email-service
-    environment: production
----
-# Document Service
+# Document Service ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: document-service
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: document-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: document-service
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for Document Service that classifies incoming documents with AI"
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: document-service
-  namespace: staging
-  labels:
-    app: document-service
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: document-service
-  namespace: production
-  labels:
-    app: document-service
-    environment: production
----
-# OCR Service
+# OCR Service ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ocr-service
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: ocr-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: ocr-service
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for OCR Service that extracts data from documents using TensorFlow"
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ocr-service
-  namespace: staging
-  labels:
-    app: ocr-service
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ocr-service
-  namespace: production
-  labels:
-    app: ocr-service
-    environment: production
----
-# Data Service
+# Data Service ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: data-service
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: data-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: data-service
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for Data Service that manages application data and business logic"
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: data-service
-  namespace: staging
-  labels:
-    app: data-service
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: data-service
-  namespace: production
-  labels:
-    app: data-service
-    environment: production
----
-# Notification Service
+# Notification Service ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: notification-service
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: notification-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: notification-service
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for Notification Service that handles alerts and webhooks"
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: notification-service
-  namespace: staging
-  labels:
-    app: notification-service
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: notification-service
-  namespace: production
-  labels:
-    app: notification-service
-    environment: production
----
-# API Gateway
+# API Gateway ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: api-gateway
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: api-gateway
-    environment: development
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: api-gateway
-  namespace: staging
-  labels:
-    app: api-gateway
-    environment: staging
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: api-gateway
-  namespace: production
-  labels:
-    app: api-gateway
-    environment: production
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Service account for Kong API Gateway that provides unified API access with security controls"
 
 ---
-# Roles for user access
-# Operations Staff Role - Development
+# Roles for user types as specified in section 0.1.3 (Authentication/Authorization Considerations)
+# Implements two specific roles: Operations Staff and System Admin
+
+# Operations Staff Role - Read all, write application data
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: operations-staff
-  namespace: development
+  name: operations-staff-role
+  namespace: mca-processing
   labels:
-    role: operations-staff
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Role for Operations Staff with permissions to read all and write application data"
 rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps"]
+# Read access to all resources
+- apiGroups: [""] # Core API group
+  resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
   verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
+# Write access to application data resources
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["application-data", "document-metadata"]
+  verbs: ["update", "patch"]
+# Access to logs
+- apiGroups: [""] # Core API group
   resources: ["pods/log"]
   verbs: ["get", "list"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["application-data-*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-# Operations Staff Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: operations-staff
-  namespace: staging
-  labels:
-    role: operations-staff
-    environment: staging
-rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["pods/log"]
-  verbs: ["get", "list"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["application-data-*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-# Operations Staff Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: operations-staff
-  namespace: production
-  labels:
-    role: operations-staff
-    environment: production
-rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["pods/log"]
-  verbs: ["get", "list"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["application-data-*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Access to application-specific custom resources
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["applications", "documents"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
 
 ---
-# System Admin Role - Development
+# System Admin Role - Full access to all endpoints and webhook configuration
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: system-admin
-  namespace: development
+  name: system-admin-role
+  namespace: mca-processing
   labels:
-    role: system-admin
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+  annotations:
+    description: "Role for System Admin with full access to all endpoints and webhook configuration"
 rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps", "secrets", "namespaces", "persistentvolumeclaims"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""] 
-  resources: ["pods/log", "pods/exec"]
-  verbs: ["get", "list", "create"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles", "rolebindings"]
-  verbs: ["get", "list", "watch"]
----
-# System Admin Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: system-admin
-  namespace: staging
-  labels:
-    role: system-admin
-    environment: staging
-rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps", "secrets", "namespaces", "persistentvolumeclaims"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""] 
-  resources: ["pods/log", "pods/exec"]
-  verbs: ["get", "list", "create"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles", "rolebindings"]
-  verbs: ["get", "list", "watch"]
----
-# System Admin Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: system-admin
-  namespace: production
-  labels:
-    role: system-admin
-    environment: production
-rules:
-- apiGroups: [""] # "" indicates the core API group
-  resources: ["pods", "services", "configmaps", "secrets", "namespaces", "persistentvolumeclaims"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: [""] 
-  resources: ["pods/log", "pods/exec"]
-  verbs: ["get", "list", "create"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles", "rolebindings"]
-  verbs: ["get", "list", "watch"]
+# Full access to all resources in the namespace
+- apiGroups: [""] # Core API group
+  resources: ["*"]
+  verbs: ["*"]
+# Full access to all custom resources
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["*"]
+  verbs: ["*"]
+# Full access to webhook configuration
+- apiGroups: ["mca.dollarfunding.com"]
+  resources: ["webhooks", "webhookconfigurations"]
+  verbs: ["*"]
+# Access to Kong API Gateway configuration
+- apiGroups: ["configuration.konghq.com"]
+  resources: ["kongplugins", "kongconsumers", "kongingresses"]
+  verbs: ["*"]
 
 ---
-# Service-specific roles with least privilege principle
-# Email Service Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: email-service-role
-  namespace: development
-  labels:
-    app: email-service
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["email-service-config", "email-credentials"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["email-service-secrets", "rabbitmq-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Email Service Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: email-service-role
-  namespace: staging
-  labels:
-    app: email-service
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["email-service-config", "email-credentials"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["email-service-secrets", "rabbitmq-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Email Service Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: email-service-role
-  namespace: production
-  labels:
-    app: email-service
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["email-service-config", "email-credentials"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["email-service-secrets", "rabbitmq-credentials"]
-  verbs: ["get", "list", "watch"]
+# RoleBindings to connect roles to service accounts
+# Implements the principle of least privilege as specified in section 3.8.4
 
----
-# Document Service Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: document-service-role
-  namespace: development
-  labels:
-    app: document-service
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["document-service-config", "document-classification-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["document-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Document Service Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: document-service-role
-  namespace: staging
-  labels:
-    app: document-service
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["document-service-config", "document-classification-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["document-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Document Service Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: document-service-role
-  namespace: production
-  labels:
-    app: document-service
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["document-service-config", "document-classification-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["document-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
-
----
-# OCR Service Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ocr-service-role
-  namespace: development
-  labels:
-    app: ocr-service
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["ocr-service-config", "ocr-models-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["ocr-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# OCR Service Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ocr-service-role
-  namespace: staging
-  labels:
-    app: ocr-service
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["ocr-service-config", "ocr-models-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["ocr-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# OCR Service Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ocr-service-role
-  namespace: production
-  labels:
-    app: ocr-service
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["ocr-service-config", "ocr-models-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["ocr-service-secrets", "rabbitmq-credentials", "s3-credentials"]
-  verbs: ["get", "list", "watch"]
-
----
-# Data Service Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: data-service-role
-  namespace: development
-  labels:
-    app: data-service
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["data-service-config", "database-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["data-service-secrets", "rabbitmq-credentials", "database-credentials", "redis-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Data Service Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: data-service-role
-  namespace: staging
-  labels:
-    app: data-service
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["data-service-config", "database-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["data-service-secrets", "rabbitmq-credentials", "database-credentials", "redis-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Data Service Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: data-service-role
-  namespace: production
-  labels:
-    app: data-service
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["data-service-config", "database-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["data-service-secrets", "rabbitmq-credentials", "database-credentials", "redis-credentials"]
-  verbs: ["get", "list", "watch"]
-
----
-# Notification Service Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: notification-service-role
-  namespace: development
-  labels:
-    app: notification-service
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["notification-service-config", "webhook-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["notification-service-secrets", "rabbitmq-credentials", "webhook-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Notification Service Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: notification-service-role
-  namespace: staging
-  labels:
-    app: notification-service
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["notification-service-config", "webhook-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["notification-service-secrets", "rabbitmq-credentials", "webhook-credentials"]
-  verbs: ["get", "list", "watch"]
----
-# Notification Service Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: notification-service-role
-  namespace: production
-  labels:
-    app: notification-service
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["notification-service-config", "webhook-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["notification-service-secrets", "rabbitmq-credentials", "webhook-credentials"]
-  verbs: ["get", "list", "watch"]
-
----
-# API Gateway Role - Development
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: api-gateway-role
-  namespace: development
-  labels:
-    app: api-gateway
-    environment: development
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["api-gateway-config", "jwt-config", "cors-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["api-gateway-secrets", "jwt-keys"]
-  verbs: ["get", "list", "watch"]
----
-# API Gateway Role - Staging
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: api-gateway-role
-  namespace: staging
-  labels:
-    app: api-gateway
-    environment: staging
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["api-gateway-config", "jwt-config", "cors-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["api-gateway-secrets", "jwt-keys"]
-  verbs: ["get", "list", "watch"]
----
-# API Gateway Role - Production
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: api-gateway-role
-  namespace: production
-  labels:
-    app: api-gateway
-    environment: production
-rules:
-- apiGroups: [""] 
-  resources: ["configmaps"]
-  resourceNames: ["api-gateway-config", "jwt-config", "cors-config"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""] 
-  resources: ["secrets"]
-  resourceNames: ["api-gateway-secrets", "jwt-keys"]
-  verbs: ["get", "list", "watch"]
-
----
-# RoleBindings for service accounts
-# Email Service RoleBindings
+# Email Service RoleBinding - Limited to email monitoring and message queue access
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: email-service-binding
-  namespace: development
+  namespace: mca-processing
   labels:
-    app: email-service
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: email-service
-  namespace: development
-roleRef:
-  kind: Role
-  name: email-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: email-service-binding
-  namespace: staging
-  labels:
-    app: email-service
-    environment: staging
-subjects:
-- kind: ServiceAccount
-  name: email-service
-  namespace: staging
-roleRef:
-  kind: Role
-  name: email-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: email-service-binding
-  namespace: production
-  labels:
-    app: email-service
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: email-service
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: email-service-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# Document Service RoleBindings
+# Email Service Role - Limited permissions for email processing
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: document-service-binding
-  namespace: development
+  name: email-service-role
+  namespace: mca-processing
   labels:
-    app: document-service
-    environment: development
-subjects:
-- kind: ServiceAccount
-  name: document-service
-  namespace: development
-roleRef:
-  kind: Role
-  name: document-service-role
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["email-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to email credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["email-credentials"]
+  verbs: ["get"]
+
 ---
+# Document Service RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: document-service-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    app: document-service
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: document-service
-  namespace: staging
-roleRef:
-  kind: Role
-  name: document-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: document-service-binding
-  namespace: production
-  labels:
-    app: document-service
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: document-service
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: document-service-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# OCR Service RoleBindings
+# Document Service Role - Limited permissions for document classification
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: ocr-service-binding
-  namespace: development
+  name: document-service-role
+  namespace: mca-processing
   labels:
-    app: ocr-service
-    environment: development
-subjects:
-- kind: ServiceAccount
-  name: ocr-service
-  namespace: development
-roleRef:
-  kind: Role
-  name: ocr-service-role
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["document-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to S3 storage credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["s3-credentials"]
+  verbs: ["get"]
+# Access to ML model configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["document-classification-models"]
+  verbs: ["get", "list", "watch"]
+
 ---
+# OCR Service RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ocr-service-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    app: ocr-service
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: ocr-service
-  namespace: staging
-roleRef:
-  kind: Role
-  name: ocr-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: ocr-service-binding
-  namespace: production
-  labels:
-    app: ocr-service
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: ocr-service
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: ocr-service-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# Data Service RoleBindings
+# OCR Service Role - Limited permissions for OCR processing
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: data-service-binding
-  namespace: development
+  name: ocr-service-role
+  namespace: mca-processing
   labels:
-    app: data-service
-    environment: development
-subjects:
-- kind: ServiceAccount
-  name: data-service
-  namespace: development
-roleRef:
-  kind: Role
-  name: data-service-role
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["ocr-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to S3 storage credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["s3-credentials"]
+  verbs: ["get"]
+# Access to TensorFlow model configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["ocr-models"]
+  verbs: ["get", "list", "watch"]
+
 ---
+# Data Service RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: data-service-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    app: data-service
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: data-service
-  namespace: staging
-roleRef:
-  kind: Role
-  name: data-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: data-service-binding
-  namespace: production
-  labels:
-    app: data-service
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: data-service
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: data-service-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# Notification Service RoleBindings
+# Data Service Role - Permissions for data management
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: notification-service-binding
-  namespace: development
+  name: data-service-role
+  namespace: mca-processing
   labels:
-    app: notification-service
-    environment: development
-subjects:
-- kind: ServiceAccount
-  name: notification-service
-  namespace: development
-roleRef:
-  kind: Role
-  name: notification-service-role
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["data-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to database credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["postgresql-credentials"]
+  verbs: ["get"]
+# Access to Redis credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["redis-credentials"]
+  verbs: ["get"]
+# Access to encryption keys for PII
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["field-encryption-keys"]
+  verbs: ["get"]
+
 ---
+# Notification Service RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: notification-service-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    app: notification-service
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: notification-service
-  namespace: staging
-roleRef:
-  kind: Role
-  name: notification-service-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: notification-service-binding
-  namespace: production
-  labels:
-    app: notification-service
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: notification-service
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: notification-service-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# API Gateway RoleBindings
+# Notification Service Role - Permissions for webhook delivery
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: api-gateway-binding
-  namespace: development
+  name: notification-service-role
+  namespace: mca-processing
   labels:
-    app: api-gateway
-    environment: development
-subjects:
-- kind: ServiceAccount
-  name: api-gateway
-  namespace: development
-roleRef:
-  kind: Role
-  name: api-gateway-role
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["notification-service-config"]
+  verbs: ["get", "list", "watch"]
+# Access to RabbitMQ credentials
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["rabbitmq-credentials"]
+  verbs: ["get"]
+# Access to webhook configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["webhook-configurations"]
+  verbs: ["get", "list", "watch"]
+# Access to webhook signing keys
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["webhook-signing-keys"]
+  verbs: ["get"]
+
 ---
+# API Gateway RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: api-gateway-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    app: api-gateway
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
 - kind: ServiceAccount
   name: api-gateway
-  namespace: staging
-roleRef:
-  kind: Role
-  name: api-gateway-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: api-gateway-binding
-  namespace: production
-  labels:
-    app: api-gateway
-    environment: production
-subjects:
-- kind: ServiceAccount
-  name: api-gateway
-  namespace: production
+  namespace: mca-processing
 roleRef:
   kind: Role
   name: api-gateway-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# User Role Bindings
-# Operations Staff RoleBindings
+# API Gateway Role - Permissions for API routing and security
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: operations-staff-binding
-  namespace: development
+  name: api-gateway-role
+  namespace: mca-processing
   labels:
-    role: operations-staff
-    environment: development
-subjects:
-- kind: Group
-  name: operations-staff
-  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: operations-staff
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+# Access to its own configuration
+- apiGroups: [""] # Core API group
+  resources: ["configmaps"]
+  resourceNames: ["api-gateway-config"]
+  verbs: ["get", "list", "watch"]
+# Access to TLS certificates
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["api-gateway-tls"]
+  verbs: ["get"]
+# Access to JWT public keys for validation
+- apiGroups: [""] # Core API group
+  resources: ["secrets"]
+  resourceNames: ["jwt-public-keys"]
+  verbs: ["get"]
+# Access to service discovery
+- apiGroups: [""] # Core API group
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+
 ---
+# RoleBindings for user roles
+
+# Operations Staff RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: operations-staff-binding
-  namespace: staging
+  namespace: mca-processing
   labels:
-    role: operations-staff
-    environment: staging
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
+# This is where user identities would be bound to the role
+# For JWT authentication, this would be managed by an authentication proxy
+# that maps JWT claims to Kubernetes RBAC
 - kind: Group
   name: operations-staff
   apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: Role
-  name: operations-staff
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: operations-staff-binding
-  namespace: production
-  labels:
-    role: operations-staff
-    environment: production
-subjects:
-- kind: Group
-  name: operations-staff
-  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: operations-staff
+  name: operations-staff-role
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# System Admin RoleBindings
+# System Admin RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: system-admin-binding
-  namespace: development
+  namespace: mca-processing
   labels:
-    role: system-admin
-    environment: development
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
+# This is where user identities would be bound to the role
+# For JWT authentication, this would be managed by an authentication proxy
+# that maps JWT claims to Kubernetes RBAC
 - kind: Group
-  name: system-admin
+  name: system-admins
   apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: Role
-  name: system-admin
+  name: system-admin-role
   apiGroup: rbac.authorization.k8s.io
+
 ---
+# ClusterRole for JWT authentication validation
+# This allows the API Gateway to validate JWTs against the public keys
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRole
 metadata:
-  name: system-admin-binding
-  namespace: staging
+  name: jwt-validator
   labels:
-    role: system-admin
-    environment: staging
-subjects:
-- kind: Group
-  name: system-admin
-  apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: system-admin
-  apiGroup: rbac.authorization.k8s.io
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+
 ---
+# ClusterRoleBinding for JWT authentication validation
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
-  name: system-admin-binding
-  namespace: production
+  name: jwt-validator-binding
   labels:
-    role: system-admin
-    environment: production
+    app.kubernetes.io/part-of: mca-processing
+    app.kubernetes.io/managed-by: terraform
 subjects:
-- kind: Group
-  name: system-admin
-  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: api-gateway
+  namespace: mca-processing
 roleRef:
-  kind: Role
-  name: system-admin
+  kind: ClusterRole
+  name: jwt-validator
   apiGroup: rbac.authorization.k8s.io
