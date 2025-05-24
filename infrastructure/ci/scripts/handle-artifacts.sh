@@ -1,743 +1,1358 @@
 #!/bin/bash
 
-# ============================================================================
 # handle-artifacts.sh
 #
-# Manages build artifacts throughout the CI/CD pipeline, including storage,
-# retrieval, and cleanup with proper versioning and integrity verification.
+# This script manages build artifacts throughout the CI/CD pipeline, including storage,
+# retrieval, and cleanup with proper versioning. It stores artifacts with appropriate
+# metadata, retrieves them for deployments, and cleans up old artifacts to prevent storage bloat.
 #
-# This script supports the MCA Application Processing System by ensuring that
-# build artifacts are properly managed, enabling reliable deployments and
-# efficient resource usage.
+# Part of the MCA Application Processing System infrastructure.
 #
-# Usage:
-#   ./handle-artifacts.sh [command] [options]
-#
-# Commands:
-#   store     - Store artifacts with metadata
-#   retrieve  - Retrieve artifacts for deployment
-#   cleanup   - Clean up old artifacts based on retention policy
-#   verify    - Verify artifact integrity
-#   list      - List available artifacts with metadata
-#
-# Options:
-#   --service-type    - Type of service (node, java, python, frontend)
-#   --env             - Environment (development, staging, production)
-#   --artifact-path   - Path to artifact or directory containing artifacts
-#   --version         - Version of the artifact (defaults to git-based version)
-#   --repository      - Artifact repository URL (defaults to environment-specific)
-#   --retention-days  - Number of days to retain artifacts (default: 30)
-#   --metadata        - Additional metadata in JSON format
-#
-# Examples:
-#   ./handle-artifacts.sh store --service-type node --env development --artifact-path ./dist
-#   ./handle-artifacts.sh retrieve --service-type java --env staging --version 1.2.3
-#   ./handle-artifacts.sh cleanup --env production --retention-days 60
-#   ./handle-artifacts.sh verify --service-type python --env staging --version 1.2.3
-#   ./handle-artifacts.sh list --service-type frontend --env production
-#
-# ============================================================================
+# Usage: ./handle-artifacts.sh --action <store|retrieve|cleanup|verify|index> --service <service-name> [options]
 
-set -e
-
-# ============================================================================
-# Configuration
-# ============================================================================
+set -eo pipefail
 
 # Default values
-DEFAULT_RETENTION_DAYS=30
-ARTIFACT_BASE_DIR="/tmp/artifacts"
-LOG_FILE="/tmp/artifact-handling.log"
-CHECKSUM_ALGORITHM="sha256sum"
-
-# Repository URLs by environment
-DEV_REPOSITORY="http://artifact-repo.dev.dollarfunding.com"
-STAGING_REPOSITORY="http://artifact-repo.staging.dollarfunding.com"
-PROD_REPOSITORY="http://artifact-repo.prod.dollarfunding.com"
-
-# ============================================================================
-# Utility Functions
-# ============================================================================
-
-# Log message to console and log file
-log() {
-    local level=$1
-    local message=$2
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "[$timestamp] [$level] $message"
-    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-}
-
-# Log info message
-log_info() {
-    log "INFO" "$1"
-}
-
-# Log error message
-log_error() {
-    log "ERROR" "$1"
-}
-
-# Log debug message
-log_debug() {
-    if [[ "$DEBUG" == "true" ]]; then
-        log "DEBUG" "$1"
-    fi
-}
-
-# Check if required tools are installed
-check_requirements() {
-    local required_tools=("curl" "jq" "$CHECKSUM_ALGORITHM")
-    
-    for tool in "${required_tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            log_error "Required tool not found: $tool"
-            exit 1
-        fi
-    done
-    
-    log_debug "All required tools are available"
-}
-
-# Generate a version string based on git information if not provided
-generate_version() {
-    if [[ -z "$VERSION" ]]; then
-        # Get the most recent tag
-        local git_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-        
-        # Get the current commit hash
-        local git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-        
-        # Get the branch name
-        local git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-        
-        # Format: <tag>-<commits-since-tag>-g<commit-hash>-<branch>
-        # If on a tag exactly, just use the tag
-        if git describe --exact-match --tags HEAD &>/dev/null; then
-            VERSION="${git_tag#v}"
-        else
-            local commits_since_tag=$(git rev-list "$git_tag"..HEAD --count 2>/dev/null || echo "0")
-            VERSION="${git_tag#v}-$commits_since_tag-g$git_commit-$git_branch"
-        fi
-        
-        log_debug "Generated version: $VERSION"
-    fi
-    
-    echo "$VERSION"
-}
-
-# Get repository URL based on environment
-get_repository_url() {
-    local env=$1
-    
-    if [[ -n "$REPOSITORY" ]]; then
-        echo "$REPOSITORY"
-        return
-    fi
-    
-    case "$env" in
-        development)
-            echo "$DEV_REPOSITORY"
-            ;;
-        staging)
-            echo "$STAGING_REPOSITORY"
-            ;;
-        production)
-            echo "$PROD_REPOSITORY"
-            ;;
-        *)
-            log_error "Unknown environment: $env"
-            exit 1
-            ;;
-    esac
-}
-
-# Generate metadata for artifacts
-generate_metadata() {
-    local service_type=$1
-    local env=$2
-    local version=$3
-    local artifact_path=$4
-    local additional_metadata=$5
-    
-    # Get build information
-    local build_number=${CI_BUILD_NUMBER:-"local"}
-    local build_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    local build_user=${CI_BUILD_USER:-$(whoami)}
-    
-    # Create basic metadata
-    local metadata='{'
-    metadata+="\"service_type\":\"$service_type\","
-    metadata+="\"environment\":\"$env\","
-    metadata+="\"version\":\"$version\","
-    metadata+="\"build_number\":\"$build_number\","
-    metadata+="\"build_timestamp\":\"$build_timestamp\","
-    metadata+="\"build_user\":\"$build_user\","
-    
-    # Add git information if available
-    if command -v git &> /dev/null && git rev-parse --is-inside-work-tree &> /dev/null; then
-        local git_commit=$(git rev-parse HEAD)
-        local git_branch=$(git rev-parse --abbrev-ref HEAD)
-        local git_repo=$(git config --get remote.origin.url)
-        
-        metadata+="\"git_commit\":\"$git_commit\","
-        metadata+="\"git_branch\":\"$git_branch\","
-        metadata+="\"git_repo\":\"$git_repo\","
-    fi
-    
-    # Add checksums for files
-    if [[ -f "$artifact_path" ]]; then
-        local checksum=$($CHECKSUM_ALGORITHM "$artifact_path" | awk '{print $1}')
-        metadata+="\"checksum\":\"$checksum\","
-        metadata+="\"checksum_algorithm\":\"${CHECKSUM_ALGORITHM%sum}\","
-    elif [[ -d "$artifact_path" ]]; then
-        # For directories, create a manifest file with checksums
-        local manifest_file="$ARTIFACT_BASE_DIR/manifest-$(date +%s).txt"
-        find "$artifact_path" -type f -exec $CHECKSUM_ALGORITHM {} \; > "$manifest_file"
-        local manifest_checksum=$($CHECKSUM_ALGORITHM "$manifest_file" | awk '{print $1}')
-        
-        metadata+="\"manifest_checksum\":\"$manifest_checksum\","
-        metadata+="\"checksum_algorithm\":\"${CHECKSUM_ALGORITHM%sum}\","
-    fi
-    
-    # Add additional metadata if provided
-    if [[ -n "$additional_metadata" ]]; then
-        # Remove the trailing comma and closing brace
-        metadata=${metadata%,}
-        
-        # Add the additional metadata (removing the opening and closing braces)
-        additional_metadata=${additional_metadata#\{}
-        additional_metadata=${additional_metadata%\}}
-        
-        if [[ -n "$additional_metadata" ]]; then
-            metadata+=",$additional_metadata"
-        fi
-    else
-        # Remove the trailing comma
-        metadata=${metadata%,}
-    fi
-    
-    # Close the JSON object
-    metadata+='}'
-    
-    # Validate JSON
-    if ! echo "$metadata" | jq . &>/dev/null; then
-        log_error "Invalid metadata JSON"
-        exit 1
-    fi
-    
-    echo "$metadata"
-}
-
-# Create artifact directory structure
-create_artifact_directory() {
-    local service_type=$1
-    local env=$2
-    local version=$3
-    
-    local artifact_dir="$ARTIFACT_BASE_DIR/$service_type/$env/$version"
-    
-    if [[ ! -d "$artifact_dir" ]]; then
-        mkdir -p "$artifact_dir"
-        log_debug "Created artifact directory: $artifact_dir"
-    fi
-    
-    echo "$artifact_dir"
-}
-
-# ============================================================================
-# Main Functions
-# ============================================================================
-
-# Store artifacts with metadata
-store_artifacts() {
-    log_info "Storing artifacts for $SERVICE_TYPE in $ENV environment"
-    
-    # Validate required parameters
-    if [[ -z "$SERVICE_TYPE" || -z "$ENV" || -z "$ARTIFACT_PATH" ]]; then
-        log_error "Missing required parameters for store command"
-        show_usage
-        exit 1
-    fi
-    
-    # Generate version if not provided
-    VERSION=$(generate_version)
-    
-    # Get repository URL
-    REPOSITORY_URL=$(get_repository_url "$ENV")
-    
-    # Create artifact directory
-    local artifact_dir=$(create_artifact_directory "$SERVICE_TYPE" "$ENV" "$VERSION")
-    
-    # Generate metadata
-    local metadata=$(generate_metadata "$SERVICE_TYPE" "$ENV" "$VERSION" "$ARTIFACT_PATH" "$METADATA")
-    
-    # Save metadata to file
-    echo "$metadata" > "$artifact_dir/metadata.json"
-    log_debug "Saved metadata to $artifact_dir/metadata.json"
-    
-    # Copy artifacts
-    if [[ -f "$ARTIFACT_PATH" ]]; then
-        # Single file
-        cp "$ARTIFACT_PATH" "$artifact_dir/"
-        log_info "Copied artifact file: $ARTIFACT_PATH to $artifact_dir/"
-    elif [[ -d "$ARTIFACT_PATH" ]]; then
-        # Directory
-        cp -r "$ARTIFACT_PATH/"* "$artifact_dir/"
-        log_info "Copied artifact directory: $ARTIFACT_PATH to $artifact_dir/"
-    else
-        log_error "Artifact path does not exist: $ARTIFACT_PATH"
-        exit 1
-    fi
-    
-    # Create checksums for all files
-    find "$artifact_dir" -type f -not -name "checksums.txt" -exec $CHECKSUM_ALGORITHM {} \; > "$artifact_dir/checksums.txt"
-    log_debug "Generated checksums for all files"
-    
-    # Upload to repository if not local
-    if [[ "$REPOSITORY_URL" != "local"* ]]; then
-        log_info "Uploading artifacts to repository: $REPOSITORY_URL"
-        
-        # Create a tarball of the artifact directory
-        local tarball_name="$SERVICE_TYPE-$ENV-$VERSION.tar.gz"
-        local tarball_path="$ARTIFACT_BASE_DIR/$tarball_name"
-        
-        tar -czf "$tarball_path" -C "$artifact_dir" .
-        log_debug "Created tarball: $tarball_path"
-        
-        # Upload the tarball to the repository
-        # This is a placeholder for the actual upload command, which would depend on the repository type
-        # For example, for Nexus or Artifactory, you would use curl or a specific client
-        
-        # Example for Artifactory:
-        # curl -u "$ARTIFACTORY_USER:$ARTIFACTORY_PASSWORD" -X PUT "$REPOSITORY_URL/$SERVICE_TYPE/$ENV/$VERSION/$tarball_name" -T "$tarball_path"
-        
-        # Example for Nexus:
-        # curl -u "$NEXUS_USER:$NEXUS_PASSWORD" -X POST "$REPOSITORY_URL/service/rest/v1/components?repository=artifacts" -F "maven2.groupId=$SERVICE_TYPE" -F "maven2.artifactId=$ENV" -F "maven2.version=$VERSION" -F "maven2.asset1=@$tarball_path"
-        
-        # Example for AWS S3:
-        # aws s3 cp "$tarball_path" "s3://artifacts-bucket/$SERVICE_TYPE/$ENV/$VERSION/$tarball_name"
-        
-        log_info "Artifacts uploaded successfully to $REPOSITORY_URL"
-        
-        # Clean up the tarball
-        rm -f "$tarball_path"
-    fi
-    
-    log_info "Artifacts stored successfully at $artifact_dir"
-    echo "Artifacts stored at: $artifact_dir"
-    echo "Version: $VERSION"
-}
-
-# Retrieve artifacts for deployment
-retrieve_artifacts() {
-    log_info "Retrieving artifacts for $SERVICE_TYPE in $ENV environment, version $VERSION"
-    
-    # Validate required parameters
-    if [[ -z "$SERVICE_TYPE" || -z "$ENV" || -z "$VERSION" ]]; then
-        log_error "Missing required parameters for retrieve command"
-        show_usage
-        exit 1
-    fi
-    
-    # Get repository URL
-    REPOSITORY_URL=$(get_repository_url "$ENV")
-    
-    # Set destination directory
-    local dest_dir="${ARTIFACT_PATH:-./artifacts}"
-    mkdir -p "$dest_dir"
-    
-    # Check if artifacts exist locally
-    local artifact_dir="$ARTIFACT_BASE_DIR/$SERVICE_TYPE/$ENV/$VERSION"
-    
-    if [[ -d "$artifact_dir" ]]; then
-        log_info "Found artifacts locally at $artifact_dir"
-        
-        # Copy artifacts to destination
-        cp -r "$artifact_dir/"* "$dest_dir/"
-        log_info "Copied artifacts to $dest_dir"
-    else
-        log_info "Artifacts not found locally, attempting to retrieve from repository"
-        
-        # Download from repository
-        if [[ "$REPOSITORY_URL" != "local"* ]]; then
-            log_info "Downloading artifacts from repository: $REPOSITORY_URL"
-            
-            # Create a temporary directory for the download
-            local temp_dir=$(mktemp -d)
-            
-            # Download the tarball from the repository
-            # This is a placeholder for the actual download command, which would depend on the repository type
-            local tarball_name="$SERVICE_TYPE-$ENV-$VERSION.tar.gz"
-            local tarball_path="$temp_dir/$tarball_name"
-            
-            # Example for Artifactory:
-            # curl -u "$ARTIFACTORY_USER:$ARTIFACTORY_PASSWORD" -o "$tarball_path" "$REPOSITORY_URL/$SERVICE_TYPE/$ENV/$VERSION/$tarball_name"
-            
-            # Example for Nexus:
-            # curl -u "$NEXUS_USER:$NEXUS_PASSWORD" -o "$tarball_path" "$REPOSITORY_URL/repository/artifacts/$SERVICE_TYPE/$ENV/$VERSION/$tarball_name"
-            
-            # Example for AWS S3:
-            # aws s3 cp "s3://artifacts-bucket/$SERVICE_TYPE/$ENV/$VERSION/$tarball_name" "$tarball_path"
-            
-            # Extract the tarball to the destination directory
-            tar -xzf "$tarball_path" -C "$dest_dir"
-            log_info "Extracted artifacts to $dest_dir"
-            
-            # Clean up the temporary directory
-            rm -rf "$temp_dir"
-        else
-            log_error "Artifacts not found locally and no remote repository configured"
-            exit 1
-        fi
-    fi
-    
-    # Verify artifact integrity
-    if [[ -f "$dest_dir/checksums.txt" ]]; then
-        log_info "Verifying artifact integrity"
-        
-        # Change to the destination directory to verify checksums
-        pushd "$dest_dir" > /dev/null
-        
-        # Verify checksums
-        if ! $CHECKSUM_ALGORITHM -c checksums.txt; then
-            log_error "Artifact integrity check failed"
-            popd > /dev/null
-            exit 1
-        fi
-        
-        log_info "Artifact integrity verified successfully"
-        popd > /dev/null
-    else
-        log_warn "No checksums file found, skipping integrity verification"
-    fi
-    
-    log_info "Artifacts retrieved successfully to $dest_dir"
-    echo "Artifacts retrieved to: $dest_dir"
-}
-
-# Clean up old artifacts based on retention policy
-cleanup_artifacts() {
-    log_info "Cleaning up old artifacts for environment: $ENV"
-    
-    # Validate required parameters
-    if [[ -z "$ENV" ]]; then
-        log_error "Missing required parameters for cleanup command"
-        show_usage
-        exit 1
-    fi
-    
-    # Set retention days
-    local retention_days=${RETENTION_DAYS:-$DEFAULT_RETENTION_DAYS}
-    log_info "Retention policy: $retention_days days"
-    
-    # Get repository URL
-    REPOSITORY_URL=$(get_repository_url "$ENV")
-    
-    # Clean up local artifacts
-    log_info "Cleaning up local artifacts older than $retention_days days"
-    
-    # Find directories older than retention_days
-    local cutoff_date=$(date -d "$retention_days days ago" +%s)
-    
-    # If service type is specified, only clean up that service
-    local search_dir="$ARTIFACT_BASE_DIR"
-    if [[ -n "$SERVICE_TYPE" ]]; then
-        search_dir="$ARTIFACT_BASE_DIR/$SERVICE_TYPE"
-    fi
-    
-    # Only clean up the specified environment
-    search_dir="$search_dir/$ENV"
-    
-    if [[ ! -d "$search_dir" ]]; then
-        log_info "No artifacts found for cleanup at $search_dir"
-        return
-    fi
-    
-    # Find all version directories
-    local version_dirs=$(find "$search_dir" -mindepth 1 -maxdepth 1 -type d)
-    local deleted_count=0
-    
-    for dir in $version_dirs; do
-        # Get the directory modification time
-        local dir_time=$(stat -c %Y "$dir")
-        
-        # Check if the directory is older than the cutoff date
-        if [[ $dir_time -lt $cutoff_date ]]; then
-            # Check if the directory contains a metadata file
-            if [[ -f "$dir/metadata.json" ]]; then
-                # Check if the artifact is marked as protected
-                local protected=$(jq -r '.protected // "false"' "$dir/metadata.json")
-                
-                if [[ "$protected" == "true" ]]; then
-                    log_debug "Skipping protected artifact: $dir"
-                    continue
-                fi
-            fi
-            
-            log_info "Deleting old artifact: $dir"
-            rm -rf "$dir"
-            deleted_count=$((deleted_count + 1))
-        fi
-    done
-    
-    log_info "Deleted $deleted_count old artifact(s)"
-    
-    # Clean up remote artifacts if configured
-    if [[ "$REPOSITORY_URL" != "local"* ]]; then
-        log_info "Cleaning up remote artifacts in repository: $REPOSITORY_URL"
-        
-        # This is a placeholder for the actual cleanup command, which would depend on the repository type
-        # For example, for Nexus or Artifactory, you would use their REST APIs to search for and delete old artifacts
-        
-        # Example for Artifactory:
-        # curl -u "$ARTIFACTORY_USER:$ARTIFACTORY_PASSWORD" -X POST "$REPOSITORY_URL/api/search/aql" -d "items.find({\"repo\":\"artifacts\", \"path\":\"$SERVICE_TYPE/$ENV\", \"created\":{\"$before\":\"${retention_days}d\"}}).include(\"path\", \"name\")" | jq -r '.results[] | .path + "/" + .name' | while read -r item; do
-        #     curl -u "$ARTIFACTORY_USER:$ARTIFACTORY_PASSWORD" -X DELETE "$REPOSITORY_URL/$item"
-        # done
-        
-        # Example for Nexus:
-        # curl -u "$NEXUS_USER:$NEXUS_PASSWORD" -X GET "$REPOSITORY_URL/service/rest/v1/search?repository=artifacts&group=$SERVICE_TYPE&name=$ENV" | jq -r '.items[] | select(.lastModified < "'$(date -d "$retention_days days ago" -Iseconds)'") | .id' | while read -r item; do
-        #     curl -u "$NEXUS_USER:$NEXUS_PASSWORD" -X DELETE "$REPOSITORY_URL/service/rest/v1/components/$item"
-        # done
-        
-        log_info "Remote artifacts cleanup completed"
-    fi
-    
-    log_info "Artifact cleanup completed"
-    echo "Cleaned up artifacts older than $retention_days days"
-}
-
-# Verify artifact integrity
-verify_artifacts() {
-    log_info "Verifying artifact integrity for $SERVICE_TYPE in $ENV environment, version $VERSION"
-    
-    # Validate required parameters
-    if [[ -z "$SERVICE_TYPE" || -z "$ENV" || -z "$VERSION" ]]; then
-        log_error "Missing required parameters for verify command"
-        show_usage
-        exit 1
-    fi
-    
-    # Set artifact directory
-    local artifact_dir="$ARTIFACT_BASE_DIR/$SERVICE_TYPE/$ENV/$VERSION"
-    
-    if [[ ! -d "$artifact_dir" ]]; then
-        log_error "Artifact directory not found: $artifact_dir"
-        exit 1
-    fi
-    
-    # Check if checksums file exists
-    if [[ ! -f "$artifact_dir/checksums.txt" ]]; then
-        log_error "Checksums file not found in artifact directory"
-        exit 1
-    fi
-    
-    log_info "Verifying checksums in $artifact_dir"
-    
-    # Change to the artifact directory to verify checksums
-    pushd "$artifact_dir" > /dev/null
-    
-    # Verify checksums
-    if ! $CHECKSUM_ALGORITHM -c checksums.txt; then
-        log_error "Artifact integrity check failed"
-        popd > /dev/null
-        exit 1
-    fi
-    
-    log_info "Artifact integrity verified successfully"
-    popd > /dev/null
-    
-    echo "Artifact integrity verified successfully"
-}
-
-# List available artifacts with metadata
-list_artifacts() {
-    log_info "Listing artifacts for $SERVICE_TYPE in $ENV environment"
-    
-    # Validate required parameters
-    if [[ -z "$ENV" ]]; then
-        log_error "Missing required parameters for list command"
-        show_usage
-        exit 1
-    fi
-    
-    # Set search directory
-    local search_dir="$ARTIFACT_BASE_DIR"
-    if [[ -n "$SERVICE_TYPE" ]]; then
-        search_dir="$ARTIFACT_BASE_DIR/$SERVICE_TYPE"
-    fi
-    
-    # Only list the specified environment
-    search_dir="$search_dir/$ENV"
-    
-    if [[ ! -d "$search_dir" ]]; then
-        log_info "No artifacts found at $search_dir"
-        echo "No artifacts found"
-        return
-    fi
-    
-    # Find all version directories
-    local version_dirs=$(find "$search_dir" -mindepth 1 -maxdepth 1 -type d | sort)
-    
-    if [[ -z "$version_dirs" ]]; then
-        log_info "No artifacts found at $search_dir"
-        echo "No artifacts found"
-        return
-    fi
-    
-    echo "Available artifacts:"
-    echo "-------------------"
-    
-    for dir in $version_dirs; do
-        local version=$(basename "$dir")
-        local service=$(basename $(dirname $(dirname "$dir")))
-        
-        echo "Service: $service"
-        echo "Environment: $ENV"
-        echo "Version: $version"
-        
-        # Display metadata if available
-        if [[ -f "$dir/metadata.json" ]]; then
-            echo "Metadata:"
-            jq . "$dir/metadata.json"
-        else
-            echo "No metadata available"
-        fi
-        
-        echo "-------------------"
-    done
-    
-    log_info "Listed artifacts successfully"
-}
-
-# Show usage information
-show_usage() {
-    echo "Usage: $0 [command] [options]"
-    echo ""
-    echo "Commands:"
-    echo "  store     - Store artifacts with metadata"
-    echo "  retrieve  - Retrieve artifacts for deployment"
-    echo "  cleanup   - Clean up old artifacts based on retention policy"
-    echo "  verify    - Verify artifact integrity"
-    echo "  list      - List available artifacts with metadata"
-    echo ""
-    echo "Options:"
-    echo "  --service-type    - Type of service (node, java, python, frontend)"
-    echo "  --env             - Environment (development, staging, production)"
-    echo "  --artifact-path   - Path to artifact or directory containing artifacts"
-    echo "  --version         - Version of the artifact (defaults to git-based version)"
-    echo "  --repository      - Artifact repository URL (defaults to environment-specific)"
-    echo "  --retention-days  - Number of days to retain artifacts (default: 30)"
-    echo "  --metadata        - Additional metadata in JSON format"
-    echo ""
-    echo "Examples:"
-    echo "  $0 store --service-type node --env development --artifact-path ./dist"
-    echo "  $0 retrieve --service-type java --env staging --version 1.2.3"
-    echo "  $0 cleanup --env production --retention-days 60"
-    echo "  $0 verify --service-type python --env staging --version 1.2.3"
-    echo "  $0 list --service-type frontend --env production"
-}
-
-# ============================================================================
-# Main Script
-# ============================================================================
-
-# Create log directory if it doesn't exist
-mkdir -p $(dirname "$LOG_FILE")
-
-# Check if required tools are installed
-check_requirements
-
-# Parse command line arguments
-COMMAND=""
-SERVICE_TYPE=""
-ENV=""
+ACTION=""
+SERVICE=""
+ENVIRONMENT="development"
+ARTIFACT_TYPE=""
 ARTIFACT_PATH=""
 VERSION=""
-REPOSITORY=""
-RETENTION_DAYS=""
-METADATA=""
-DEBUG="false"
+TAG=""
+RETENTION_DAYS=30
+VERBOSE=false
+FORCE=false
+REPOSITORY_TYPE="s3"
+REPOSITORY_URL=""
+REPOSITORY_USER=""
+REPOSITORY_TOKEN=""
+METADATA_FILE=""
+CHECKSUM_ALGORITHM="sha256"
+TIMEOUT=300
+RETRIES=3
+RETRY_DELAY=10
 
-# Parse command
-if [[ $# -gt 0 ]]; then
-    COMMAND=$1
-    shift
-fi
+# MCA Application Processing System specific settings
+MCA_CONFIG_DIR="${REPO_ROOT}/infrastructure/ci/config"
+MCA_ARTIFACTS_DIR="${REPO_ROOT}/artifacts"
 
-# Parse options
+# Color codes for output
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[0;33m"
+BLUE="\033[0;34m"
+NC="\033[0m" # No Color
+
+# Script directory for relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+# Parse command line arguments
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        --service-type)
-            SERVICE_TYPE=$2
-            shift 2
-            ;;
-        --env)
-            ENV=$2
-            shift 2
-            ;;
-        --artifact-path)
-            ARTIFACT_PATH=$2
-            shift 2
-            ;;
-        --version)
-            VERSION=$2
-            shift 2
-            ;;
-        --repository)
-            REPOSITORY=$2
-            shift 2
-            ;;
-        --retention-days)
-            RETENTION_DAYS=$2
-            shift 2
-            ;;
-        --metadata)
-            METADATA=$2
-            shift 2
-            ;;
-        --debug)
-            DEBUG="true"
-            shift
-            ;;
-        *)
-            log_error "Unknown option: $1"
-            show_usage
-            exit 1
-            ;;
-    esac
+  case "$1" in
+    --action)
+      ACTION="$2"
+      shift 2
+      ;;
+    --service)
+      SERVICE="$2"
+      shift 2
+      ;;
+    --environment)
+      ENVIRONMENT="$2"
+      shift 2
+      ;;
+    --artifact-type)
+      ARTIFACT_TYPE="$2"
+      shift 2
+      ;;
+    --artifact-path)
+      ARTIFACT_PATH="$2"
+      shift 2
+      ;;
+    --version)
+      VERSION="$2"
+      shift 2
+      ;;
+    --tag)
+      TAG="$2"
+      shift 2
+      ;;
+    --retention-days)
+      RETENTION_DAYS="$2"
+      shift 2
+      ;;
+    --repository-type)
+      REPOSITORY_TYPE="$2"
+      shift 2
+      ;;
+    --repository-url)
+      REPOSITORY_URL="$2"
+      shift 2
+      ;;
+    --repository-user)
+      REPOSITORY_USER="$2"
+      shift 2
+      ;;
+    --repository-token)
+      REPOSITORY_TOKEN="$2"
+      shift 2
+      ;;
+    --metadata-file)
+      METADATA_FILE="$2"
+      shift 2
+      ;;
+    --checksum-algorithm)
+      CHECKSUM_ALGORITHM="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    --retries)
+      RETRIES="$2"
+      shift 2
+      ;;
+    --retry-delay)
+      RETRY_DELAY="$2"
+      shift 2
+      ;;
+    --force)
+      FORCE=true
+      shift
+      ;;
+    --verbose)
+      VERBOSE=true
+      shift
+      ;;
+    --help)
+      echo "Usage: ./handle-artifacts.sh --action <store|retrieve|cleanup|verify> --service <service-name> [options]"
+      echo ""
+      echo "Actions:"
+      echo "  store     Store artifacts in the repository"
+      echo "  retrieve  Retrieve artifacts from the repository"
+      echo "  cleanup   Clean up old artifacts based on retention policy"
+      echo "  verify    Verify artifact integrity"
+      echo "  index     Index artifact metadata for searching"
+      echo ""
+      echo "Required arguments:"
+      echo "  --action          Action to perform (required)"
+      echo "  --service         Service name (required)"
+      echo ""
+      echo "Options:"
+      echo "  --environment      Target environment (development, staging, production) (default: development)"
+      echo "  --artifact-type    Type of artifact (ui, container, helm, terraform, etc.)"
+      echo "  --artifact-path    Path to the artifact file or directory"
+      echo "  --version          Artifact version (default: derived from git)"
+      echo "  --tag              Additional tag for the artifact"
+      echo "  --retention-days   Number of days to retain artifacts (default: 30)"
+      echo "  --repository-type  Repository type (s3, nexus, artifactory) (default: s3)"
+      echo "  --repository-url   Repository URL"
+      echo "  --repository-user  Repository username"
+      echo "  --repository-token Repository token/password"
+      echo "  --metadata-file    Path to additional metadata JSON file"
+      echo "  --checksum-algorithm  Algorithm for checksums (md5, sha1, sha256, sha512) (default: sha256)"
+      echo "  --timeout          Timeout in seconds for operations (default: 300)"
+      echo "  --retries          Number of retries for operations (default: 3)"
+      echo "  --retry-delay      Delay between retries in seconds (default: 10)"
+      echo "  --force            Force operation even if validation fails"
+      echo "  --verbose          Enable verbose logging"
+      echo "  --help             Display this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Run './handle-artifacts.sh --help' for usage information"
+      exit 1
+      ;;
+  esac
 done
 
-# Execute command
-case $COMMAND in
-    store)
-        store_artifacts
-        ;;
-    retrieve)
-        retrieve_artifacts
-        ;;
-    cleanup)
-        cleanup_artifacts
-        ;;
-    verify)
-        verify_artifacts
-        ;;
-    list)
-        list_artifacts
-        ;;
-    help)
-        show_usage
-        ;;
-    "")
-        log_error "No command specified"
-        show_usage
-        exit 1
-        ;;
-    *)
-        log_error "Unknown command: $COMMAND"
-        show_usage
-        exit 1
-        ;;
-esac
+# Validate required arguments
+if [ -z "$ACTION" ] || [ -z "$SERVICE" ]; then
+  echo -e "${RED}Error: Missing required arguments${NC}"
+  echo "Run './handle-artifacts.sh --help' for usage information"
+  exit 1
+fi
 
-exit 0
+# Validate action
+if [[ "$ACTION" != "store" && "$ACTION" != "retrieve" && "$ACTION" != "cleanup" && "$ACTION" != "verify" && "$ACTION" != "index" ]]; then
+  echo -e "${RED}Error: Invalid action. Must be one of: store, retrieve, cleanup, verify, index${NC}"
+  exit 1
+fi
+
+# Validate environment
+if [[ "$ENVIRONMENT" != "development" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "production" ]]; then
+  echo -e "${RED}Error: Environment must be one of: development, staging, production${NC}"
+  exit 1
+fi
+
+# Log function with timestamp
+log() {
+  local level=$1
+  local message=$2
+  local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  
+  case "$level" in
+    "INFO")
+      echo -e "${BLUE}[INFO]${NC} $timestamp - $message"
+      ;;
+    "SUCCESS")
+      echo -e "${GREEN}[SUCCESS]${NC} $timestamp - $message"
+      ;;
+    "WARN")
+      echo -e "${YELLOW}[WARN]${NC} $timestamp - $message"
+      ;;
+    "ERROR")
+      echo -e "${RED}[ERROR]${NC} $timestamp - $message"
+      ;;
+    *)
+      echo -e "$timestamp - $message"
+      ;;
+  esac
+  
+  # Log to file
+  local log_dir="${REPO_ROOT}/logs/artifacts"
+  mkdir -p "$log_dir"
+  local log_file="${log_dir}/${SERVICE}-${ENVIRONMENT}-$(date +"%Y%m%d").log"
+  echo "$timestamp - [$level] - $message" >> "$log_file"
+}
+
+# Verbose logging function
+log_verbose() {
+  if [ "$VERBOSE" = true ]; then
+    log "INFO" "$1"
+  fi
+}
+
+# Function to retry a command
+retry() {
+  local cmd=$1
+  local description=$2
+  local n=1
+  local max=$RETRIES
+  local delay=$RETRY_DELAY
+  
+  log_verbose "Executing: $description"
+  
+  while true; do
+    log_verbose "Attempt $n/$max: $description"
+    
+    if eval "$cmd"; then
+      log_verbose "Command succeeded: $description"
+      return 0
+    fi
+    
+    if [[ $n -lt $max ]]; then
+      log "WARN" "Command failed, retrying in $delay seconds: $description"
+      sleep $delay
+      ((n++))
+    else
+      log "ERROR" "Command failed after $max attempts: $description"
+      return 1
+    fi
+  done
+}
+
+# Function to check required tools
+check_required_tools() {
+  log_verbose "Checking required tools"
+  
+  # Check for common tools
+  for tool in jq curl tar gzip; do
+    if ! command -v $tool &> /dev/null; then
+      log "ERROR" "$tool is not installed or not in PATH"
+      return 1
+    fi
+  done
+  
+  # Check for repository-specific tools
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      if ! command -v aws &> /dev/null; then
+        log "ERROR" "aws CLI is not installed or not in PATH"
+        return 1
+      fi
+      ;;
+    "nexus")
+      # Nexus uses curl which we already checked
+      ;;
+    "artifactory")
+      # Artifactory uses curl which we already checked
+      ;;
+    *)
+      log "ERROR" "Unsupported repository type: $REPOSITORY_TYPE"
+      return 1
+      ;;
+  esac
+  
+  return 0
+}
+
+# Function to determine artifact version if not provided
+determine_version() {
+  if [ -n "$VERSION" ]; then
+    log_verbose "Using provided version: $VERSION"
+    return 0
+  fi
+  
+  log_verbose "Determining version from Git"
+  
+  # Check if we're in a Git repository
+  if [ -d "${REPO_ROOT}/.git" ]; then
+    # Get the Git commit SHA
+    local git_commit=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)
+    
+    if [ -n "$git_commit" ]; then
+      # Check if there's a tag pointing to this commit
+      local git_tag=$(git -C "${REPO_ROOT}" tag --points-at HEAD 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+      
+      if [ -n "$git_tag" ]; then
+        # Use the tag as the version (without the 'v' prefix)
+        VERSION="${git_tag#v}"
+        log_verbose "Using Git tag as version: $VERSION"
+      else
+        # Use the commit SHA as the version
+        VERSION="0.0.0-${git_commit}"
+        log_verbose "Using Git commit as version: $VERSION"
+      fi
+    else
+      log "WARN" "Failed to get Git commit SHA"
+      VERSION="0.0.0-unknown"
+    fi
+  else
+    log "WARN" "Not a Git repository, using timestamp as version"
+    VERSION="0.0.0-$(date +"%Y%m%d%H%M%S")"
+  fi
+  
+  log "INFO" "Determined version: $VERSION"
+  return 0
+}
+
+# Function to determine artifact type if not provided
+determine_artifact_type() {
+  if [ -n "$ARTIFACT_TYPE" ]; then
+    log_verbose "Using provided artifact type: $ARTIFACT_TYPE"
+    return 0
+  fi
+  
+  log_verbose "Determining artifact type based on service and path"
+  
+  # Determine artifact type based on service name and path
+  case "$SERVICE" in
+    "frontend")
+      ARTIFACT_TYPE="ui"
+      ;;
+    "email-service" | "notification-service")
+      ARTIFACT_TYPE="node"
+      ;;
+    "document-service" | "ocr-service")
+      ARTIFACT_TYPE="python"
+      ;;
+    "data-service")
+      ARTIFACT_TYPE="java"
+      ;;
+    "api-gateway")
+      ARTIFACT_TYPE="kong"
+      ;;
+    *)
+      # Try to determine from the artifact path
+      if [[ "$ARTIFACT_PATH" == *".jar" ]]; then
+        ARTIFACT_TYPE="java"
+      elif [[ "$ARTIFACT_PATH" == *".zip" && -d "${REPO_ROOT}/frontend/dist" ]]; then
+        ARTIFACT_TYPE="ui"
+      elif [[ "$ARTIFACT_PATH" == *".tar.gz" && -f "${REPO_ROOT}/Dockerfile" ]]; then
+        ARTIFACT_TYPE="container"
+      elif [[ -d "${REPO_ROOT}/infrastructure/terraform" && "$ARTIFACT_PATH" == *".tfplan" ]]; then
+        ARTIFACT_TYPE="terraform"
+      elif [[ -d "${REPO_ROOT}/infrastructure/kubernetes" && "$ARTIFACT_PATH" == *".yaml" ]]; then
+        ARTIFACT_TYPE="kubernetes"
+      else
+        log "WARN" "Could not determine artifact type, using 'generic'"
+        ARTIFACT_TYPE="generic"
+      fi
+      ;;
+  esac
+  
+  log "INFO" "Determined artifact type: $ARTIFACT_TYPE"
+  return 0
+}
+
+# Function to generate artifact metadata
+generate_metadata() {
+  log "INFO" "Generating artifact metadata"
+  
+  local artifact_file=$(basename "$ARTIFACT_PATH")
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local hostname=$(hostname)
+  local username=$(whoami)
+  local git_commit=""
+  local git_branch=""
+  local build_number="${BUILD_NUMBER:-unknown}"
+  local build_url="${BUILD_URL:-unknown}"
+  local job_name="${JOB_NAME:-unknown}"
+  
+  # Get Git information if available
+  if [ -d "${REPO_ROOT}/.git" ]; then
+    git_commit=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo "unknown")
+    git_branch=$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+  fi
+  
+  # Calculate checksums
+  local checksum=""
+  case "$CHECKSUM_ALGORITHM" in
+    "md5")
+      checksum=$(md5sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha1")
+      checksum=$(sha1sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha256")
+      checksum=$(sha256sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha512")
+      checksum=$(sha512sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    *)
+      log "WARN" "Unsupported checksum algorithm: $CHECKSUM_ALGORITHM, using sha256"
+      checksum=$(sha256sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+  esac
+  
+  # Get file size
+  local file_size=$(stat -c%s "$ARTIFACT_PATH")
+  
+  # Create metadata JSON
+  local metadata_json="{
+    \"service\": \"$SERVICE\",
+    \"environment\": \"$ENVIRONMENT\",
+    \"artifact_type\": \"$ARTIFACT_TYPE\",
+    \"artifact_name\": \"$artifact_file\",
+    \"version\": \"$VERSION\",
+    \"tag\": \"$TAG\",
+    \"timestamp\": \"$timestamp\",
+    \"build_number\": \"$build_number\",
+    \"build_url\": \"$build_url\",
+    \"job_name\": \"$job_name\",
+    \"git_commit\": \"$git_commit\",
+    \"git_branch\": \"$git_branch\",
+    \"checksum_algorithm\": \"$CHECKSUM_ALGORITHM\",
+    \"checksum\": \"$checksum\",
+    \"file_size\": $file_size,
+    \"created_by\": \"$username\",
+    \"hostname\": \"$hostname\"
+  }"
+  
+  # Merge with additional metadata if provided
+  if [ -n "$METADATA_FILE" ] && [ -f "$METADATA_FILE" ]; then
+    log_verbose "Merging with additional metadata from $METADATA_FILE"
+    metadata_json=$(jq -s '.[0] * .[1]' <(echo "$metadata_json") "$METADATA_FILE")
+  fi
+  
+  # Create metadata file
+  local metadata_dir="${MCA_ARTIFACTS_DIR}/metadata/${SERVICE}/${ENVIRONMENT}"
+  mkdir -p "$metadata_dir"
+  local metadata_path="${metadata_dir}/${SERVICE}-${VERSION}.json"
+  echo "$metadata_json" > "$metadata_path"
+  
+  log "SUCCESS" "Metadata generated and saved to $metadata_path"
+  echo "$metadata_path"
+  return 0
+}
+
+# Function to determine repository URL if not provided
+determine_repository_url() {
+  if [ -n "$REPOSITORY_URL" ]; then
+    log_verbose "Using provided repository URL: $REPOSITORY_URL"
+    return 0
+  fi
+  
+  log_verbose "Determining repository URL based on repository type and environment"
+  
+  # Check environment variables first
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      if [ -n "$S3_ARTIFACT_BUCKET" ]; then
+        REPOSITORY_URL="$S3_ARTIFACT_BUCKET"
+      fi
+      ;;
+    "nexus")
+      if [ -n "$NEXUS_URL" ]; then
+        REPOSITORY_URL="$NEXUS_URL"
+      fi
+      ;;
+    "artifactory")
+      if [ -n "$ARTIFACTORY_URL" ]; then
+        REPOSITORY_URL="$ARTIFACTORY_URL"
+      fi
+      ;;
+  esac
+  
+  # If still not set, check config files
+  if [ -z "$REPOSITORY_URL" ]; then
+    local config_file="${MCA_CONFIG_DIR}/artifacts-${ENVIRONMENT}.conf"
+    if [ -f "$config_file" ]; then
+      case "$REPOSITORY_TYPE" in
+        "s3")
+          REPOSITORY_URL=$(grep -oP 'S3_ARTIFACT_BUCKET=\K.*' "$config_file" || echo "")
+          ;;
+        "nexus")
+          REPOSITORY_URL=$(grep -oP 'NEXUS_URL=\K.*' "$config_file" || echo "")
+          ;;
+        "artifactory")
+          REPOSITORY_URL=$(grep -oP 'ARTIFACTORY_URL=\K.*' "$config_file" || echo "")
+          ;;
+      esac
+    fi
+  fi
+  
+  # If still not set, use default based on environment
+  if [ -z "$REPOSITORY_URL" ]; then
+    case "$REPOSITORY_TYPE" in
+      "s3")
+        REPOSITORY_URL="mca-artifacts-${ENVIRONMENT}"
+        ;;
+      "nexus")
+        REPOSITORY_URL="https://nexus.example.com/repository/mca-${ENVIRONMENT}"
+        ;;
+      "artifactory")
+        REPOSITORY_URL="https://artifactory.example.com/artifactory/mca-${ENVIRONMENT}"
+        ;;
+    esac
+    log "WARN" "Repository URL not provided, using default: $REPOSITORY_URL"
+  fi
+  
+  log "INFO" "Using repository URL: $REPOSITORY_URL"
+  return 0
+}
+
+# Function to determine repository credentials if not provided
+determine_repository_credentials() {
+  # If credentials are already provided, use them
+  if [ -n "$REPOSITORY_USER" ] && [ -n "$REPOSITORY_TOKEN" ]; then
+    log_verbose "Using provided repository credentials"
+    return 0
+  fi
+  
+  log_verbose "Determining repository credentials based on repository type and environment"
+  
+  # For S3, we rely on AWS CLI configuration or instance profile
+  if [ "$REPOSITORY_TYPE" = "s3" ]; then
+    log_verbose "Using AWS CLI configuration for S3 authentication"
+    return 0
+  fi
+  
+  # Check environment variables first
+  case "$REPOSITORY_TYPE" in
+    "nexus")
+      if [ -n "$NEXUS_USER" ] && [ -n "$NEXUS_TOKEN" ]; then
+        REPOSITORY_USER="$NEXUS_USER"
+        REPOSITORY_TOKEN="$NEXUS_TOKEN"
+      fi
+      ;;
+    "artifactory")
+      if [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_TOKEN" ]; then
+        REPOSITORY_USER="$ARTIFACTORY_USER"
+        REPOSITORY_TOKEN="$ARTIFACTORY_TOKEN"
+      fi
+      ;;
+  esac
+  
+  # If still not set, check config files
+  if [ -z "$REPOSITORY_USER" ] || [ -z "$REPOSITORY_TOKEN" ]; then
+    local config_file="${MCA_CONFIG_DIR}/artifacts-${ENVIRONMENT}.conf"
+    if [ -f "$config_file" ]; then
+      case "$REPOSITORY_TYPE" in
+        "nexus")
+          REPOSITORY_USER=$(grep -oP 'NEXUS_USER=\K.*' "$config_file" || echo "")
+          REPOSITORY_TOKEN=$(grep -oP 'NEXUS_TOKEN=\K.*' "$config_file" || echo "")
+          ;;
+        "artifactory")
+          REPOSITORY_USER=$(grep -oP 'ARTIFACTORY_USER=\K.*' "$config_file" || echo "")
+          REPOSITORY_TOKEN=$(grep -oP 'ARTIFACTORY_TOKEN=\K.*' "$config_file" || echo "")
+          ;;
+      esac
+    fi
+  fi
+  
+  # Validate credentials for non-S3 repositories
+  if [ "$REPOSITORY_TYPE" != "s3" ] && ([ -z "$REPOSITORY_USER" ] || [ -z "$REPOSITORY_TOKEN" ]); then
+    log "ERROR" "Repository credentials not found for $REPOSITORY_TYPE"
+    return 1
+  fi
+  
+  log_verbose "Repository credentials determined successfully"
+  return 0
+}
+
+# Function to store artifact in repository
+store_artifact() {
+  log "INFO" "Storing artifact: $ARTIFACT_PATH"
+  
+  # Validate artifact path
+  if [ ! -f "$ARTIFACT_PATH" ]; then
+    log "ERROR" "Artifact file not found: $ARTIFACT_PATH"
+    return 1
+  fi
+  
+  # Generate metadata
+  local metadata_path=$(generate_metadata)
+  if [ $? -ne 0 ]; then
+    log "ERROR" "Failed to generate metadata"
+    return 1
+  fi
+  
+  # Determine repository URL and credentials
+  determine_repository_url
+  determine_repository_credentials
+  
+  # Prepare artifact for storage
+  local artifact_file=$(basename "$ARTIFACT_PATH")
+  local artifact_key="${SERVICE}/${VERSION}/${artifact_file}"
+  local metadata_file=$(basename "$metadata_path")
+  local metadata_key="metadata/${SERVICE}/${VERSION}/${metadata_file}"
+  
+  # Store artifact based on repository type
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      log "INFO" "Uploading artifact to S3: $REPOSITORY_URL/$artifact_key"
+      
+      # Upload artifact
+      local s3_cmd="aws s3 cp \"$ARTIFACT_PATH\" s3://\"$REPOSITORY_URL/$artifact_key\" --metadata-directive REPLACE"
+      if [ "$VERBOSE" = true ]; then
+        s3_cmd="$s3_cmd --debug"
+      fi
+      
+      if ! retry "$s3_cmd" "Upload artifact to S3"; then
+        log "ERROR" "Failed to upload artifact to S3"
+        return 1
+      fi
+      
+      # Upload metadata
+      log "INFO" "Uploading metadata to S3: $REPOSITORY_URL/$metadata_key"
+      s3_cmd="aws s3 cp \"$metadata_path\" s3://\"$REPOSITORY_URL/$metadata_key\" --content-type application/json --metadata-directive REPLACE"
+      if [ "$VERBOSE" = true ]; then
+        s3_cmd="$s3_cmd --debug"
+      fi
+      
+      if ! retry "$s3_cmd" "Upload metadata to S3"; then
+        log "ERROR" "Failed to upload metadata to S3"
+        return 1
+      fi
+      
+      # Add tags if specified
+      if [ -n "$TAG" ]; then
+        log "INFO" "Adding tag to S3 object: $TAG"
+        local tag_cmd="aws s3api put-object-tagging --bucket \"$REPOSITORY_URL\" --key \"$artifact_key\" --tagging 'TagSet=[{Key=\"tag\",Value=\"$TAG\"}]'"
+        
+        if ! retry "$tag_cmd" "Add tag to S3 object"; then
+          log "WARN" "Failed to add tag to S3 object, but artifact was uploaded successfully"
+        fi
+      fi
+      ;;
+      
+    "nexus")
+      log "INFO" "Uploading artifact to Nexus: $REPOSITORY_URL/$artifact_key"
+      
+      # Upload artifact
+      local nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X PUT \"$REPOSITORY_URL/$artifact_key\" --upload-file \"$ARTIFACT_PATH\" -H \"Content-Type: application/octet-stream\""
+      if [ "$VERBOSE" = true ]; then
+        nexus_cmd="$nexus_cmd -v"
+      else
+        nexus_cmd="$nexus_cmd -s"
+      fi
+      
+      if ! retry "$nexus_cmd" "Upload artifact to Nexus"; then
+        log "ERROR" "Failed to upload artifact to Nexus"
+        return 1
+      fi
+      
+      # Upload metadata
+      log "INFO" "Uploading metadata to Nexus: $REPOSITORY_URL/$metadata_key"
+      nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X PUT \"$REPOSITORY_URL/$metadata_key\" --upload-file \"$metadata_path\" -H \"Content-Type: application/json\""
+      if [ "$VERBOSE" = true ]; then
+        nexus_cmd="$nexus_cmd -v"
+      else
+        nexus_cmd="$nexus_cmd -s"
+      fi
+      
+      if ! retry "$nexus_cmd" "Upload metadata to Nexus"; then
+        log "ERROR" "Failed to upload metadata to Nexus"
+        return 1
+      fi
+      ;;
+      
+    "artifactory")
+      log "INFO" "Uploading artifact to Artifactory: $REPOSITORY_URL/$artifact_key"
+      
+      # Upload artifact with properties
+      local props="service=$SERVICE;environment=$ENVIRONMENT;version=$VERSION"
+      if [ -n "$TAG" ]; then
+        props="$props;tag=$TAG"
+      fi
+      
+      local artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X PUT \"$REPOSITORY_URL/$artifact_key;$props\" --upload-file \"$ARTIFACT_PATH\" -H \"Content-Type: application/octet-stream\""
+      if [ "$VERBOSE" = true ]; then
+        artifactory_cmd="$artifactory_cmd -v"
+      else
+        artifactory_cmd="$artifactory_cmd -s"
+      fi
+      
+      if ! retry "$artifactory_cmd" "Upload artifact to Artifactory"; then
+        log "ERROR" "Failed to upload artifact to Artifactory"
+        return 1
+      fi
+      
+      # Upload metadata
+      log "INFO" "Uploading metadata to Artifactory: $REPOSITORY_URL/$metadata_key"
+      artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X PUT \"$REPOSITORY_URL/$metadata_key;$props\" --upload-file \"$metadata_path\" -H \"Content-Type: application/json\""
+      if [ "$VERBOSE" = true ]; then
+        artifactory_cmd="$artifactory_cmd -v"
+      else
+        artifactory_cmd="$artifactory_cmd -s"
+      fi
+      
+      if ! retry "$artifactory_cmd" "Upload metadata to Artifactory"; then
+        log "ERROR" "Failed to upload metadata to Artifactory"
+        return 1
+      fi
+      ;;
+  esac
+  
+  log "SUCCESS" "Artifact stored successfully: $SERVICE/$VERSION/$artifact_file"
+  return 0
+}
+
+# Function to retrieve artifact from repository
+retrieve_artifact() {
+  log "INFO" "Retrieving artifact for $SERVICE version $VERSION"
+  
+  # Determine repository URL and credentials
+  determine_repository_url
+  determine_repository_credentials
+  
+  # Determine output path if not provided
+  if [ -z "$ARTIFACT_PATH" ]; then
+    ARTIFACT_PATH="${MCA_ARTIFACTS_DIR}/${SERVICE}/${VERSION}"
+    mkdir -p "$ARTIFACT_PATH"
+    log_verbose "Output path not provided, using: $ARTIFACT_PATH"
+  fi
+  
+  # Prepare artifact key
+  local artifact_key=""
+  local metadata_key=""
+  
+  # If artifact file name is not known, try to get it from metadata
+  if [[ "$ARTIFACT_PATH" == */ ]]; then
+    log_verbose "Artifact path is a directory, will try to get artifact name from metadata"
+    
+    # Get metadata first
+    metadata_key="metadata/${SERVICE}/${VERSION}/${SERVICE}-${VERSION}.json"
+    local metadata_file="${ARTIFACT_PATH}/${SERVICE}-${VERSION}.json"
+    
+    case "$REPOSITORY_TYPE" in
+      "s3")
+        log_verbose "Downloading metadata from S3: $REPOSITORY_URL/$metadata_key"
+        local s3_cmd="aws s3 cp s3://\"$REPOSITORY_URL/$metadata_key\" \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          s3_cmd="$s3_cmd --debug"
+        fi
+        
+        if ! retry "$s3_cmd" "Download metadata from S3"; then
+          log "ERROR" "Failed to download metadata from S3"
+          return 1
+        fi
+        ;;
+        
+      "nexus")
+        log_verbose "Downloading metadata from Nexus: $REPOSITORY_URL/$metadata_key"
+        local nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$metadata_key\" -o \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          nexus_cmd="$nexus_cmd -v"
+        else
+          nexus_cmd="$nexus_cmd -s"
+        fi
+        
+        if ! retry "$nexus_cmd" "Download metadata from Nexus"; then
+          log "ERROR" "Failed to download metadata from Nexus"
+          return 1
+        fi
+        ;;
+        
+      "artifactory")
+        log_verbose "Downloading metadata from Artifactory: $REPOSITORY_URL/$metadata_key"
+        local artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$metadata_key\" -o \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          artifactory_cmd="$artifactory_cmd -v"
+        else
+          artifactory_cmd="$artifactory_cmd -s"
+        fi
+        
+        if ! retry "$artifactory_cmd" "Download metadata from Artifactory"; then
+          log "ERROR" "Failed to download metadata from Artifactory"
+          return 1
+        fi
+        ;;
+    esac
+    
+    # Extract artifact name from metadata
+    if [ -f "$metadata_file" ]; then
+      local artifact_name=$(jq -r '.artifact_name' "$metadata_file")
+      if [ -n "$artifact_name" ] && [ "$artifact_name" != "null" ]; then
+        artifact_key="${SERVICE}/${VERSION}/${artifact_name}"
+        ARTIFACT_PATH="${ARTIFACT_PATH}/${artifact_name}"
+        log_verbose "Extracted artifact name from metadata: $artifact_name"
+      else
+        log "ERROR" "Failed to extract artifact name from metadata"
+        return 1
+      fi
+    else
+      log "ERROR" "Metadata file not found: $metadata_file"
+      return 1
+    fi
+  else
+    # Artifact file name is provided in the path
+    local artifact_name=$(basename "$ARTIFACT_PATH")
+    artifact_key="${SERVICE}/${VERSION}/${artifact_name}"
+    metadata_key="metadata/${SERVICE}/${VERSION}/${SERVICE}-${VERSION}.json"
+    log_verbose "Using provided artifact name: $artifact_name"
+  fi
+  
+  # Create directory if it doesn't exist
+  mkdir -p "$(dirname "$ARTIFACT_PATH")"
+  
+  # Download artifact based on repository type
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      log "INFO" "Downloading artifact from S3: $REPOSITORY_URL/$artifact_key"
+      local s3_cmd="aws s3 cp s3://\"$REPOSITORY_URL/$artifact_key\" \"$ARTIFACT_PATH\""
+      if [ "$VERBOSE" = true ]; then
+        s3_cmd="$s3_cmd --debug"
+      fi
+      
+      if ! retry "$s3_cmd" "Download artifact from S3"; then
+        log "ERROR" "Failed to download artifact from S3"
+        return 1
+      fi
+      ;;
+      
+    "nexus")
+      log "INFO" "Downloading artifact from Nexus: $REPOSITORY_URL/$artifact_key"
+      local nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$artifact_key\" -o \"$ARTIFACT_PATH\""
+      if [ "$VERBOSE" = true ]; then
+        nexus_cmd="$nexus_cmd -v"
+      else
+        nexus_cmd="$nexus_cmd -s"
+      fi
+      
+      if ! retry "$nexus_cmd" "Download artifact from Nexus"; then
+        log "ERROR" "Failed to download artifact from Nexus"
+        return 1
+      fi
+      ;;
+      
+    "artifactory")
+      log "INFO" "Downloading artifact from Artifactory: $REPOSITORY_URL/$artifact_key"
+      local artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$artifact_key\" -o \"$ARTIFACT_PATH\""
+      if [ "$VERBOSE" = true ]; then
+        artifactory_cmd="$artifactory_cmd -v"
+      else
+        artifactory_cmd="$artifactory_cmd -s"
+      fi
+      
+      if ! retry "$artifactory_cmd" "Download artifact from Artifactory"; then
+        log "ERROR" "Failed to download artifact from Artifactory"
+        return 1
+      fi
+      ;;
+  esac
+  
+  log "SUCCESS" "Artifact retrieved successfully: $ARTIFACT_PATH"
+  return 0
+}
+
+# Function to verify artifact integrity
+verify_artifact() {
+  log "INFO" "Verifying artifact integrity: $ARTIFACT_PATH"
+  
+  # Validate artifact path
+  if [ ! -f "$ARTIFACT_PATH" ]; then
+    log "ERROR" "Artifact file not found: $ARTIFACT_PATH"
+    return 1
+  fi
+  
+  # If version is not provided, try to extract it from the path
+  if [ -z "$VERSION" ]; then
+    local path_parts=(${ARTIFACT_PATH//\// })
+    for ((i=0; i<${#path_parts[@]}; i++)); do
+      if [[ "${path_parts[i]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        VERSION="${path_parts[i]}"
+        log_verbose "Extracted version from path: $VERSION"
+        break
+      fi
+    done
+    
+    if [ -z "$VERSION" ]; then
+      log "ERROR" "Could not determine version, please provide it with --version"
+      return 1
+    fi
+  fi
+  
+  # Determine repository URL and credentials
+  determine_repository_url
+  determine_repository_credentials
+  
+  # Get metadata
+  local metadata_key="metadata/${SERVICE}/${VERSION}/${SERVICE}-${VERSION}.json"
+  local metadata_file="${MCA_ARTIFACTS_DIR}/metadata/${SERVICE}/${ENVIRONMENT}/${SERVICE}-${VERSION}.json"
+  mkdir -p "$(dirname "$metadata_file")"
+  
+  # Download metadata if not already available locally
+  if [ ! -f "$metadata_file" ]; then
+    log_verbose "Metadata not found locally, downloading from repository"
+    
+    case "$REPOSITORY_TYPE" in
+      "s3")
+        log_verbose "Downloading metadata from S3: $REPOSITORY_URL/$metadata_key"
+        local s3_cmd="aws s3 cp s3://\"$REPOSITORY_URL/$metadata_key\" \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          s3_cmd="$s3_cmd --debug"
+        fi
+        
+        if ! retry "$s3_cmd" "Download metadata from S3"; then
+          log "ERROR" "Failed to download metadata from S3"
+          return 1
+        fi
+        ;;
+        
+      "nexus")
+        log_verbose "Downloading metadata from Nexus: $REPOSITORY_URL/$metadata_key"
+        local nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$metadata_key\" -o \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          nexus_cmd="$nexus_cmd -v"
+        else
+          nexus_cmd="$nexus_cmd -s"
+        fi
+        
+        if ! retry "$nexus_cmd" "Download metadata from Nexus"; then
+          log "ERROR" "Failed to download metadata from Nexus"
+          return 1
+        fi
+        ;;
+        
+      "artifactory")
+        log_verbose "Downloading metadata from Artifactory: $REPOSITORY_URL/$metadata_key"
+        local artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/$metadata_key\" -o \"$metadata_file\""
+        if [ "$VERBOSE" = true ]; then
+          artifactory_cmd="$artifactory_cmd -v"
+        else
+          artifactory_cmd="$artifactory_cmd -s"
+        fi
+        
+        if ! retry "$artifactory_cmd" "Download metadata from Artifactory"; then
+          log "ERROR" "Failed to download metadata from Artifactory"
+          return 1
+        fi
+        ;;
+    esac
+  fi
+  
+  # Verify metadata exists
+  if [ ! -f "$metadata_file" ]; then
+    log "ERROR" "Metadata file not found: $metadata_file"
+    return 1
+  fi
+  
+  # Extract checksum algorithm and expected checksum from metadata
+  local expected_checksum=$(jq -r '.checksum' "$metadata_file")
+  local checksum_algorithm=$(jq -r '.checksum_algorithm' "$metadata_file")
+  
+  if [ -z "$expected_checksum" ] || [ "$expected_checksum" = "null" ]; then
+    log "ERROR" "Checksum not found in metadata"
+    return 1
+  fi
+  
+  if [ -z "$checksum_algorithm" ] || [ "$checksum_algorithm" = "null" ]; then
+    log "WARN" "Checksum algorithm not found in metadata, using sha256"
+    checksum_algorithm="sha256"
+  fi
+  
+  # Calculate actual checksum
+  local actual_checksum=""
+  case "$checksum_algorithm" in
+    "md5")
+      actual_checksum=$(md5sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha1")
+      actual_checksum=$(sha1sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha256")
+      actual_checksum=$(sha256sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    "sha512")
+      actual_checksum=$(sha512sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+    *)
+      log "WARN" "Unsupported checksum algorithm: $checksum_algorithm, using sha256"
+      actual_checksum=$(sha256sum "$ARTIFACT_PATH" | awk '{print $1}')
+      ;;
+  esac
+  
+  # Compare checksums
+  if [ "$actual_checksum" = "$expected_checksum" ]; then
+    log "SUCCESS" "Artifact integrity verified: checksums match"
+    return 0
+  else
+    log "ERROR" "Artifact integrity verification failed: checksums do not match"
+    log "ERROR" "Expected: $expected_checksum"
+    log "ERROR" "Actual: $actual_checksum"
+    return 1
+  fi
+}
+
+# Function to clean up old artifacts
+cleanup_artifacts() {
+  log "INFO" "Cleaning up old artifacts for $SERVICE in $ENVIRONMENT environment"
+  
+  # Determine repository URL and credentials
+  determine_repository_url
+  determine_repository_credentials
+  
+  # Calculate cutoff date
+  local cutoff_date=$(date -d "$RETENTION_DAYS days ago" +"%Y-%m-%d")
+  log_verbose "Retention policy: $RETENTION_DAYS days (cutoff date: $cutoff_date)"
+  
+  # List artifacts based on repository type
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      log "INFO" "Listing artifacts in S3: $REPOSITORY_URL/$SERVICE/"
+      
+      # List all artifacts for the service
+      local s3_cmd="aws s3 ls s3://\"$REPOSITORY_URL/$SERVICE/\" --recursive"
+      local artifacts=$(eval "$s3_cmd")
+      
+      if [ -z "$artifacts" ]; then
+        log "INFO" "No artifacts found for $SERVICE"
+        return 0
+      fi
+      
+      # Process each artifact
+      local deleted_count=0
+      while read -r line; do
+        # Extract date and key from the listing
+        local date_str=$(echo "$line" | awk '{print $1}')
+        local artifact_key=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
+        
+        # Skip metadata files for now (we'll delete them after the main artifacts)
+        if [[ "$artifact_key" == metadata/* ]]; then
+          continue
+        fi
+        
+        # Check if the artifact is older than the cutoff date
+        if [[ "$date_str" < "$cutoff_date" ]]; then
+          # Check if this is a release version that should be kept
+          if [[ "$artifact_key" =~ /[0-9]+\.[0-9]+\.[0-9]+/ ]] && ! [[ "$artifact_key" =~ -SNAPSHOT/ ]]; then
+            # This is a release version, check if it has a keep tag
+            local tags_cmd="aws s3api get-object-tagging --bucket \"$REPOSITORY_URL\" --key \"$artifact_key\""
+            local tags_output=$(eval "$tags_cmd" 2>/dev/null)
+            
+            if echo "$tags_output" | grep -q '"Key": "keep"'; then
+              log_verbose "Keeping release artifact with 'keep' tag: $artifact_key"
+              continue
+            fi
+          fi
+          
+          # Delete the artifact
+          log "INFO" "Deleting old artifact: $artifact_key (from $date_str)"
+          local delete_cmd="aws s3 rm s3://\"$REPOSITORY_URL/$artifact_key\""
+          
+          if retry "$delete_cmd" "Delete artifact from S3"; then
+            ((deleted_count++))
+            
+            # Also delete the corresponding metadata
+            local version=$(echo "$artifact_key" | grep -oP "$SERVICE/\K[^/]+")
+            local metadata_key="metadata/$SERVICE/$version/${SERVICE}-${version}.json"
+            local metadata_delete_cmd="aws s3 rm s3://\"$REPOSITORY_URL/$metadata_key\""
+            
+            retry "$metadata_delete_cmd" "Delete metadata from S3"
+          fi
+        fi
+      done <<< "$artifacts"
+      
+      log "SUCCESS" "Cleanup completed: deleted $deleted_count artifacts"
+      ;;
+      
+    "nexus")
+      log "INFO" "Cleaning up artifacts in Nexus is handled by Nexus repository policies"
+      log "INFO" "Please configure cleanup policies in the Nexus repository manager"
+      ;;
+      
+    "artifactory")
+      log "INFO" "Cleaning up artifacts in Artifactory is handled by Artifactory retention policies"
+      log "INFO" "Please configure retention policies in the Artifactory repository manager"
+      ;;
+  esac
+  
+  return 0
+}
+
+# Function to index artifact metadata for searching
+index_artifacts() {
+  log "INFO" "Indexing artifact metadata for $SERVICE in $ENVIRONMENT environment"
+  
+  # Determine repository URL and credentials
+  determine_repository_url
+  determine_repository_credentials
+  
+  # Create index directory
+  local index_dir="${MCA_ARTIFACTS_DIR}/index/${SERVICE}/${ENVIRONMENT}"
+  mkdir -p "$index_dir"
+  
+  # Create or update index file
+  local index_file="${index_dir}/artifacts.json"
+  
+  # Initialize index file if it doesn't exist
+  if [ ! -f "$index_file" ]; then
+    echo "[]" > "$index_file"
+  fi
+  
+  # List metadata files based on repository type
+  case "$REPOSITORY_TYPE" in
+    "s3")
+      log "INFO" "Listing metadata in S3: $REPOSITORY_URL/metadata/$SERVICE/"
+      
+      # List all metadata files for the service
+      local s3_cmd="aws s3 ls s3://\"$REPOSITORY_URL/metadata/$SERVICE/\" --recursive"
+      local metadata_files=$(eval "$s3_cmd")
+      
+      if [ -z "$metadata_files" ]; then
+        log "INFO" "No metadata found for $SERVICE"
+        return 0
+      fi
+      
+      # Process each metadata file
+      local temp_dir=$(mktemp -d)
+      local indexed_count=0
+      
+      while read -r line; do
+        # Extract key from the listing
+        local metadata_key=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
+        
+        # Download metadata file
+        local temp_file="${temp_dir}/$(basename "$metadata_key")"
+        local download_cmd="aws s3 cp s3://\"$REPOSITORY_URL/$metadata_key\" \"$temp_file\""
+        
+        if retry "$download_cmd" "Download metadata from S3"; then
+          # Add to index
+          local metadata_content=$(cat "$temp_file")
+          local current_index=$(cat "$index_file")
+          
+          # Extract version from metadata
+          local version=$(jq -r '.version' "$temp_file")
+          
+          # Check if this version is already in the index
+          if ! echo "$current_index" | jq -e ".[] | select(.version == \"$version\")" > /dev/null; then
+            # Add to index
+            echo "$current_index" | jq '. += ['$metadata_content']' > "$index_file"
+            ((indexed_count++))
+          fi
+        fi
+      done <<< "$metadata_files"
+      
+      # Clean up temp directory
+      rm -rf "$temp_dir"
+      
+      log "SUCCESS" "Indexing completed: indexed $indexed_count artifacts"
+      ;;
+      
+    "nexus")
+      log "INFO" "Indexing Nexus artifacts"
+      
+      # Get list of artifacts using Nexus REST API
+      local nexus_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$REPOSITORY_URL/service/rest/v1/components?repository=mca-${ENVIRONMENT}&group=$SERVICE\""
+      local nexus_response=$(eval "$nexus_cmd")
+      
+      if [ -z "$nexus_response" ]; then
+        log "INFO" "No artifacts found in Nexus for $SERVICE"
+        return 0
+      fi
+      
+      # Process each artifact
+      local items=$(echo "$nexus_response" | jq -r '.items')
+      local indexed_count=0
+      
+      if [ "$items" != "null" ] && [ "$items" != "[]" ]; then
+        local item_count=$(echo "$items" | jq '. | length')
+        
+        for ((i=0; i<item_count; i++)); do
+          local item=$(echo "$items" | jq -r ".[$i]")
+          local version=$(echo "$item" | jq -r '.version')
+          
+          # Get metadata asset
+          local assets=$(echo "$item" | jq -r '.assets')
+          local metadata_url=""
+          
+          for ((j=0; j<$(echo "$assets" | jq '. | length'); j++)); do
+            local asset=$(echo "$assets" | jq -r ".[$j]")
+            local path=$(echo "$asset" | jq -r '.path')
+            
+            if [[ "$path" == *".json" ]]; then
+              metadata_url=$(echo "$asset" | jq -r '.downloadUrl')
+              break
+            fi
+          done
+          
+          if [ -n "$metadata_url" ]; then
+            # Download metadata
+            local temp_file=$(mktemp)
+            local download_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$metadata_url\" -o \"$temp_file\""
+            
+            if retry "$download_cmd" "Download metadata from Nexus"; then
+              # Add to index
+              local metadata_content=$(cat "$temp_file")
+              local current_index=$(cat "$index_file")
+              
+              # Check if this version is already in the index
+              if ! echo "$current_index" | jq -e ".[] | select(.version == \"$version\")" > /dev/null; then
+                # Add to index
+                echo "$current_index" | jq '. += ['$metadata_content']' > "$index_file"
+                ((indexed_count++))
+              fi
+              
+              rm -f "$temp_file"
+            fi
+          fi
+        done
+      fi
+      
+      log "SUCCESS" "Indexing completed: indexed $indexed_count artifacts"
+      ;;
+      
+    "artifactory")
+      log "INFO" "Indexing Artifactory artifacts"
+      
+      # Get list of artifacts using Artifactory AQL
+      local aql_query='{"repo":"mca-'"$ENVIRONMENT"'","path":"'"$SERVICE"'","type":"file","name":{"$match":"*.json"},"path":{"$match":"*/metadata/*"}}'      
+      local artifactory_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X POST -H \"Content-Type: text/plain\" -d \"$aql_query\" \"$REPOSITORY_URL/api/search/aql\""
+      local artifactory_response=$(eval "$artifactory_cmd")
+      
+      if [ -z "$artifactory_response" ]; then
+        log "INFO" "No artifacts found in Artifactory for $SERVICE"
+        return 0
+      fi
+      
+      # Process each artifact
+      local items=$(echo "$artifactory_response" | jq -r '.results')
+      local indexed_count=0
+      
+      if [ "$items" != "null" ] && [ "$items" != "[]" ]; then
+        local item_count=$(echo "$items" | jq '. | length')
+        
+        for ((i=0; i<item_count; i++)); do
+          local item=$(echo "$items" | jq -r ".[$i]")
+          local repo=$(echo "$item" | jq -r '.repo')
+          local path=$(echo "$item" | jq -r '.path')
+          local name=$(echo "$item" | jq -r '.name')
+          
+          # Download metadata
+          local metadata_url="$REPOSITORY_URL/$repo/$path/$name"
+          local temp_file=$(mktemp)
+          local download_cmd="curl -s -u \"$REPOSITORY_USER:$REPOSITORY_TOKEN\" -X GET \"$metadata_url\" -o \"$temp_file\""
+          
+          if retry "$download_cmd" "Download metadata from Artifactory"; then
+            # Add to index
+            local metadata_content=$(cat "$temp_file")
+            local current_index=$(cat "$index_file")
+            local version=$(echo "$metadata_content" | jq -r '.version')
+            
+            # Check if this version is already in the index
+            if ! echo "$current_index" | jq -e ".[] | select(.version == \"$version\")" > /dev/null; then
+              # Add to index
+              echo "$current_index" | jq '. += ['$metadata_content']' > "$index_file"
+              ((indexed_count++))
+            fi
+            
+            rm -f "$temp_file"
+          fi
+        done
+      fi
+      
+      log "SUCCESS" "Indexing completed: indexed $indexed_count artifacts"
+      ;;
+  esac
+  
+  return 0
+}
+
+# Main function
+main() {
+  log "INFO" "Starting artifact handling for $SERVICE ($ACTION)"
+  
+  # Check required tools
+  if ! check_required_tools; then
+    log "ERROR" "Required tools are not available, cannot proceed"
+    exit 1
+  fi
+  
+  # Determine version if not provided
+  determine_version
+  
+  # Determine artifact type if not provided
+  determine_artifact_type
+  
+  # Perform the requested action
+  case "$ACTION" in
+    "store")
+      if [ -z "$ARTIFACT_PATH" ]; then
+        log "ERROR" "Artifact path is required for store action"
+        exit 1
+      fi
+      
+      if ! store_artifact; then
+        log "ERROR" "Failed to store artifact"
+        exit 1
+      fi
+      ;;
+      
+    "retrieve")
+      if ! retrieve_artifact; then
+        log "ERROR" "Failed to retrieve artifact"
+        exit 1
+      fi
+      ;;
+      
+    "verify")
+      if [ -z "$ARTIFACT_PATH" ]; then
+        log "ERROR" "Artifact path is required for verify action"
+        exit 1
+      fi
+      
+      if ! verify_artifact; then
+        log "ERROR" "Artifact verification failed"
+        exit 1
+      fi
+      ;;
+      
+    "cleanup")
+      if ! cleanup_artifacts; then
+        log "ERROR" "Failed to clean up artifacts"
+        exit 1
+      fi
+      ;;
+      
+    "index")
+      if ! index_artifacts; then
+        log "ERROR" "Failed to index artifacts"
+        exit 1
+      fi
+      ;;
+  esac
+  
+  log "SUCCESS" "Artifact handling completed successfully for $SERVICE ($ACTION)"
+  exit 0
+}
+
+# Run the main function
+main
