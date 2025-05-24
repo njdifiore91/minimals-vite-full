@@ -1,34 +1,35 @@
-# MinIO instance configuration for MCA Application Processing System
-# This file defines the MinIO Tenant Custom Resource that creates an S3-compatible
-# storage instance with the required buckets, encryption, and access controls.
-# 
-# This configuration implements the following requirements from the technical specification:
-# - S3-compatible storage with AES-256 encryption for document storage
-# - Buckets: 'mca-documents-production' and 'mca-documents-staging'
-# - Bucket versioning and lifecycle policies for document retention
-# - Access controls for secure document access
-# - High availability configuration with proper scaling based on environment
-
 apiVersion: minio.min.io/v2
 kind: Tenant
 metadata:
-  name: mca-minio
-  # Create in dedicated namespace for storage resources
+  name: mca-storage
   namespace: mca-storage
   labels:
-    app: mca-application
+    app: mca-application-processing
     component: storage
-    # This will be replaced by the actual environment value during deployment
-    environment: $(ENVIRONMENT)
 spec:
-  # High availability configuration with 4 pods for production, 2 for staging
-  # This implements the requirement for scalable, secure storage with proper redundancy
+  # High availability configuration with 4 replicas
+  replicas: 4
+  # Request 4 CPU cores and 16Gi RAM for production workload
+  resources:
+    requests:
+      cpu: 4
+      memory: 16Gi
+    limits:
+      cpu: 8
+      memory: 32Gi
+  # Enable automatic TLS certificate generation
+  requestAutoCert: true
+  # Configure TLS certificate settings
+  certConfig:
+    commonName: "*.mca-storage.svc.cluster.local"
+    organizationName: "Dollar Funding"
+    dnsNames:
+      - "minio.mca-storage.svc.cluster.local"
+      - "*.mca-storage.svc.cluster.local"
+  # Configure MinIO server with 4 pools for high availability
   pools:
     - name: pool-0
-      # Scale based on environment - 4 servers for production, 2 for staging
-      # This is configured via environment variables during deployment
-      servers: $(SERVERS)
-      # Each server has 4 volumes for erasure coding and data protection
+      servers: 4
       volumesPerServer: 4
       volumeClaimTemplate:
         metadata:
@@ -38,246 +39,250 @@ spec:
             - ReadWriteOnce
           resources:
             requests:
-              # 500GB per volume, resulting in 8TB raw storage for production (4 servers × 4 volumes × 500GB)
-              # and 4TB raw storage for staging (2 servers × 4 volumes × 500GB)
-              storage: 500Gi
-          # Use the storage class defined in storage-classes.yaml
-          storageClassName: minio-storage
-      # Configure resources based on environment
-      resources:
-        requests:
-          cpu: 1
-          memory: 4Gi
-        limits:
-          cpu: 2
-          memory: 8Gi
-      # Security context for MinIO pods
-      securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-  
-  # Enable automatic certificate management for TLS
-  # This implements the security requirement for encrypted connections
-  requestAutoCert: true
-  certConfig:
-    commonName: mca-minio.dollarfunding.com
-    organizationName: Dollar Funding
-    dnsNames:
-      - mca-minio.dollarfunding.com
-      # Environment-specific DNS name
-      - mca-minio.$(ENVIRONMENT).dollarfunding.com
-  
-  # Enable console for management
-  console:
-    replicas: 1
-    resources:
-      requests:
-        cpu: 500m
-        memory: 512Mi
-      limits:
-        cpu: 1
-        memory: 1Gi
-  
-  # Configure MinIO with required settings
-  configuration:
-    name: mca-minio-config
-  
-  # Enable encryption for all data with AES-256
-  # This implements the requirement for AES-256 encryption for document storage
-  # as specified in section 3.5.2 of the technical specification
-  encryption:
-    enabled: true
-    config:
-      name: mca-minio-encryption
-      secretKey: MINIO_KMS_SECRET_KEY
-  
-  # Configure buckets with versioning and lifecycle policies
-  # This implements the requirement for document storage buckets with versioning
-  # and lifecycle policies as specified in section 3.5.2 of the technical specification
-  buckets:
-    - name: mca-documents-production
-      objectLock: false
-      # Enable versioning for document history tracking and compliance
-      versioning: true
-      region: us-east-1
-      purge: false
-      # Only create in production environment
-      condition:
-        expression: "$(ENVIRONMENT) == 'production'"
-      # Lifecycle rules for document retention and storage optimization
-      lifecycle:
-        - id: transition-to-ia
-          status: Enabled
-          # Transition objects to Standard-IA after 30 days
-          transition:
-            days: 30
-            storageClass: STANDARD_IA
-        - id: expire-old-versions
-          status: Enabled
-          # Keep non-current versions for 7 years (2555 days) for compliance
-          noncurrentVersionExpiration:
-            noncurrentDays: 2555
-    - name: mca-documents-staging
-      objectLock: false
-      # Enable versioning for document history tracking
-      versioning: true
-      region: us-east-1
-      purge: false
-      # Only create in staging environment
-      condition:
-        expression: "$(ENVIRONMENT) == 'staging'"
-      # Lifecycle rules for document retention and storage optimization
-      lifecycle:
-        - id: transition-to-ia
-          status: Enabled
-          # Transition objects to Standard-IA after 30 days
-          transition:
-            days: 30
-            storageClass: STANDARD_IA
-        - id: expire-old-versions
-          status: Enabled
-          # Keep non-current versions for 90 days in staging
-          noncurrentVersionExpiration:
-            noncurrentDays: 90
-  
-  # Configure users for access control
-  # This implements the requirement for secure document access with proper authentication
-  # and authorization as specified in section 0.1.3 of the technical specification
-  users:
-    # Admin user for console management
-    - name: mca-admin
-      secretName: mca-minio-admin-credentials
-      policy: consoleAdmin
-    # Application user for document access
-    - name: mca-app
-      secretName: mca-minio-app-credentials
-      policy: readwrite
-    # Read-only user for reporting and auditing
-    - name: mca-readonly
-      secretName: mca-minio-readonly-credentials
-      policy: readonly
-  
-  # Define custom policies for access control
-  # This implements the requirement for secure document access with proper authorization
-  policies:
-    # Read-write policy for application access
-    - name: readwrite
-      statements:
-        - effect: Allow
-          resources:
-            - 'arn:aws:s3:::mca-documents-*/*'
-          actions:
-            - 's3:GetObject'
-            - 's3:PutObject'
-            - 's3:ListBucket'
-            - 's3:GetBucketLocation'
-    # Read-only policy for reporting and auditing
-    - name: readonly
-      statements:
-        - effect: Allow
-          resources:
-            - 'arn:aws:s3:::mca-documents-*/*'
-          actions:
-            - 's3:GetObject'
-            - 's3:ListBucket'
-            - 's3:GetBucketLocation'
-  
-  # Configure environment variables for MinIO
-  # These settings implement various requirements from the technical specification
+              storage: 1Ti
+          # Use storage class that supports encryption
+          storageClassName: mca-encrypted-storage
+  # Configure S3 API settings
+  s3:
+    bucketDNS: false
+  # Enable encryption for data at rest
   env:
-    # Console access URL
-    - name: MINIO_BROWSER_REDIRECT_URL
-      value: https://mca-minio.$(ENVIRONMENT).dollarfunding.com
-    
-    # Storage class configuration with erasure coding for data protection
-    # EC:4 means data is split into 4 parts with parity for redundancy
-    - name: MINIO_STORAGE_CLASS_STANDARD
-      value: EC:4
-    
-    # Enable compression for document storage efficiency
-    # This reduces storage costs and improves performance
-    - name: MINIO_COMPRESSION_ENABLE
-      value: "on"
-    - name: MINIO_COMPRESSION_EXTENSIONS
-      value: ".pdf,.docx,.xlsx,.csv,.txt"
-    - name: MINIO_COMPRESSION_MIME_TYPES
-      value: "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain"
-    
-    # Enable server-side encryption with AES-256
-    # This implements the requirement for AES-256 encryption for document storage
-    # as specified in section 3.5.2 of the technical specification
+    - name: MINIO_KMS_KES_CERT_FILE
+      value: "/etc/minio/certs/kes.crt"
+    - name: MINIO_KMS_KES_KEY_FILE
+      value: "/etc/minio/certs/kes.key"
+    - name: MINIO_KMS_KES_ENDPOINT
+      value: "https://kes.mca-storage.svc.cluster.local:7373"
+    - name: MINIO_KMS_KES_KEY_NAME
+      value: "mca-encryption-key"
+    # Enable AES-256 encryption for all objects
     - name: MINIO_KMS_AUTO_ENCRYPTION
       value: "on"
-    - name: MINIO_KMS_KES_ENDPOINT
-      value: "https://kes.mca-storage:7373"
-    - name: MINIO_KMS_KES_KEY_FILE
-      value: "/etc/minio/kes/key"
-    - name: MINIO_KMS_KES_CERT_FILE
-      value: "/etc/minio/kes/cert"
-    - name: MINIO_KMS_KES_CA_PATH
-      value: "/etc/minio/kes/ca.crt"
-    - name: MINIO_KMS_KES_KEY_NAME
-      value: "minio-key"
-      
-    # Enable audit logging for compliance
+    # Configure secure TLS settings
+    - name: MINIO_BROWSER_REDIRECT_URL
+      value: "https://minio-console.mca-storage.svc.cluster.local"
+    # Configure secure API access
+    - name: MINIO_API_REQUESTS_MAX
+      value: "1000"
+    # Configure secure connection settings
+    - name: MINIO_COMPRESSION_ENABLE
+      value: "on"
+    # Configure secure access logging
     - name: MINIO_AUDIT_WEBHOOK_ENABLE
       value: "on"
     - name: MINIO_AUDIT_WEBHOOK_ENDPOINT
-      value: "http://audit-service.mca-monitoring:8080/audit"
-  
-  # Configure pod security
-  podManagementPolicy: Parallel
-  priorityClassName: high-priority
-  
-  # Configure service settings
-  # This implements the requirement for secure access to the storage service
-  serviceMetadata:
-    minioServiceLabels:
-      app: mca-minio
-      component: storage
-    minioServiceAnnotations:
-      # Configure load balancer for HTTPS
-      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: https
-      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: $(SSL_CERT_ARN)
-      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
-      # Enable internal load balancer for security
-      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
-      # Add monitoring annotations
-      prometheus.io/scrape: "true"
-      prometheus.io/port: "9000"
-      prometheus.io/path: "/minio/v2/metrics/cluster"
-  
-  # Configure network settings
-  serviceName: mca-minio-service
-  exposeServices:
-    minio: true
-    console: true
-  
+      value: "http://notification-service.mca-system.svc.cluster.local:8080/audit"
+    # Configure secure authentication
+    - name: MINIO_IDENTITY_OPENID_CONFIG_URL
+      value: "https://api-gateway.mca-system.svc.cluster.local/.well-known/openid-configuration"
+    - name: MINIO_IDENTITY_OPENID_CLIENT_ID
+      value: "minio-storage"
+    # Configure secure storage settings
+    - name: MINIO_STORAGE_CLASS_STANDARD
+      value: "EC:4"
+    - name: MINIO_STORAGE_CLASS_RRS
+      value: "EC:2"
+  # Configure Key Encryption Service for AES-256 encryption
+  kes:
+    replicas: 2
+    image: minio/kes:latest
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+    resources:
+      requests:
+        cpu: 1
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+    # Configure KES to use Kubernetes secrets for key management
+    configuration:
+      # Define the KES server configuration
+      server:
+        address: "0.0.0.0:7373"
+        root: "disabled"
+        tls:
+          cert: "/etc/kes/certs/server.crt"
+          key: "/etc/kes/certs/server.key"
+          ca: "/etc/kes/certs/ca.crt"
+      # Define the log configuration
+      log:
+        error: "on"
+        audit: "on"
+      # Define the policy configuration
+      policy:
+        minio-policy:
+          paths:
+            - "/v1/key/create/*"
+            - "/v1/key/generate/*"
+            - "/v1/key/decrypt/*"
+            - "/v1/key/encrypt/*"
+          identities:
+            - "${MINIO_IDENTITY}"
+      # Define the keystore configuration for AES-256 encryption
+      keystore:
+        kubernetes:
+          namespace: "mca-storage"
+          secretPrefix: "kes-"
+          annotations:
+            - "mca-application-processing"
+      # Define the keys to be managed by KES
+      keys:
+        - name: mca-encryption-key
+          type: "aes-256"
+  # Configure buckets to be created automatically
+  buckets:
+    - name: mca-documents-production
+      objectLock: false
+      versioning: true
+      purge: false
+      region: "us-east-1"
+      # Configure lifecycle policies for production bucket
+      lifecycle:
+        - id: "expire-old-versions"
+          status: "Enabled"
+          expiration:
+            days: 365
+          noncurrentVersionExpiration:
+            noncurrentDays: 90
+          filter:
+            prefix: ""
+        - id: "delete-expired-delete-markers"
+          status: "Enabled"
+          expiredObjectDeleteMarker: true
+          filter:
+            prefix: ""
+      # Configure encryption settings for production bucket with AES-256 as specified in the technical specification
+      encryption:
+        algorithm: "AES256"
+        # Use server-side encryption with KMS managed keys
+        sseAlgorithm: "aws:kms"
+        kmsMasterKeyID: "mca-encryption-key"
+      # Configure access controls for production bucket
+      policy: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": ["s3:GetObject"],
+              "Resource": ["arn:aws:s3:::mca-documents-production/*"],
+              "Condition": {"IpAddress": {"aws:SourceIp": ["10.0.0.0/8"]}}
+            }
+          ]
+        }
+    - name: mca-documents-staging
+      objectLock: false
+      versioning: true
+      purge: false
+      region: "us-east-1"
+      # Configure lifecycle policies for staging bucket
+      lifecycle:
+        - id: "expire-old-versions"
+          status: "Enabled"
+          expiration:
+            days: 180
+          noncurrentVersionExpiration:
+            noncurrentDays: 30
+          filter:
+            prefix: ""
+        - id: "delete-expired-delete-markers"
+          status: "Enabled"
+          expiredObjectDeleteMarker: true
+          filter:
+            prefix: ""
+      # Configure encryption settings for staging bucket with AES-256 as specified in the technical specification
+      encryption:
+        algorithm: "AES256"
+        # Use server-side encryption with KMS managed keys
+        sseAlgorithm: "aws:kms"
+        kmsMasterKeyID: "mca-encryption-key"
+      # Configure access controls for staging bucket
+      policy: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {"AWS": "*"},
+              "Action": ["s3:GetObject"],
+              "Resource": ["arn:aws:s3:::mca-documents-staging/*"],
+              "Condition": {"IpAddress": {"aws:SourceIp": ["10.0.0.0/8"]}}
+            }
+          ]
+        }
+  # Configure pod security context
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
   # Configure liveness and readiness probes
-  # This implements the requirement for high availability and reliability
-  # with proper health monitoring as specified in section 0.2.6 of the technical specification
   liveness:
     initialDelaySeconds: 120
     periodSeconds: 60
-    timeoutSeconds: 5
-    failureThreshold: 3
   readiness:
-    initialDelaySeconds: 60
-    periodSeconds: 15
-    timeoutSeconds: 5
-    failureThreshold: 3
-  
+    initialDelaySeconds: 120
+    periodSeconds: 60
+  # Configure pod anti-affinity to ensure high availability
+  podManagementPolicy: Parallel
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - mca-storage
+          topologyKey: "kubernetes.io/hostname"
+  # Configure prometheus monitoring
+  prometheus:
+    expose: true
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/path: "/minio/v2/metrics/cluster"
+      prometheus.io/port: "9000"
+  # Configure service settings for secure access as specified in the technical specification
+  serviceMetadata:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-east-1:123456789012:certificate/abcdef12-3456-7890-abcd-ef1234567890"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+      # Add annotations for monitoring and observability
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9000"
+      # Add annotations for security
+      security.alpha.kubernetes.io/sysctls: "net.ipv4.ip_local_port_range=1024 65535"
+  # Configure external service for access from outside the cluster
+  externalCertSecret:
+    name: "minio-external-cert"
+    type: "kubernetes.io/tls"
+  # Configure network policies
+  networkPolicy:
+    allowExternal: true
+    allowedNamespaces:
+      - "mca-system"
+      - "mca-application"
+  # Configure pod disruption budget for high availability
+  podDisruptionBudget:
+    maxUnavailable: 1
+  # Configure priority class for pod scheduling
+  priorityClassName: "high-priority"
   # Configure update strategy
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  
-  # Configure image pull policy
-  imagePullPolicy: IfNotPresent
-  
-  # Configure image pull secrets if using private registry
-  imagePullSecrets:
-    - name: mca-registry-credentials
+      maxUnavailable: 1
+  # Configure node selector for placement
+  nodeSelector:
+    storage-type: "ssd"
+    kubernetes.io/os: "linux"
+  # Configure tolerations for node taints
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "storage"
+      effect: "NoSchedule"
