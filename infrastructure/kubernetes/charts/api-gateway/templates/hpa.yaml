@@ -1,92 +1,193 @@
-{{- $environment := .Values.environment | default "production" -}}
-{{- $autoscaling := dict -}}
+{{- /*
+HorizontalPodAutoscaler template for Kong API Gateway.
 
-{{- if hasKey .Values.environmentOverrides $environment -}}
-  {{- if hasKey (index .Values.environmentOverrides $environment) "autoscaling" -}}
-    {{- $autoscaling = merge .Values.autoscaling (index .Values.environmentOverrides $environment "autoscaling") -}}
-  {{- else -}}
-    {{- $autoscaling = .Values.autoscaling -}}
-  {{- end -}}
-{{- else -}}
-  {{- $autoscaling = .Values.autoscaling -}}
-{{- end -}}
+This template defines a Kubernetes HorizontalPodAutoscaler (HPA) that automatically scales
+the Kong API Gateway based on CPU, memory, and request rate metrics. It includes proper
+scaling behavior with stabilization windows to prevent rapid fluctuations and supports
+different scaling parameters for different environments.
 
-{{- if (index $autoscaling "enabled") -}}
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: {{ include "kong.fullname" . }}
-  labels:
-    {{- include "kong.labels" . | nindent 4 }}
-  {{- with (index $autoscaling "annotations") }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: {{ include "kong.fullname" . }}
-  minReplicas: {{ index $autoscaling "minReplicas" | default 1 }}
-  maxReplicas: {{ index $autoscaling "maxReplicas" | default 10 }}
-  
-  {{- if (index $autoscaling "behavior") }}
-  behavior:
-    {{- toYaml (index $autoscaling "behavior") | nindent 4 }}
-  {{- else }}
-  # Default behavior to prevent scaling flapping
+Key features:
+- CPU and memory-based scaling metrics
+- Request rate-based custom metrics
+- Environment-specific scaling configurations
+- Configurable scaling behavior with stabilization windows
+- Support for different scaling policies for scale up and scale down
+
+Usage:
+- This template is automatically included when deploying the Kong API Gateway chart
+- Configure autoscaling settings in the api-gateway values.yaml file
+
+Example values.yaml configuration:
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  targetRequestsPerSecond: 1000
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300
       policies:
       - type: Percent
-        value: 100
-        periodSeconds: 15
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-      - type: Pods
-        value: 4
-        periodSeconds: 15
-      selectPolicy: Max
+        value: 10
+        periodSeconds: 60
+*/ -}}
+
+{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "api-gateway.fullname" . }}
+  labels:
+    {{- include "api-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "kong"
+    {{- if .Values.autoscaling.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.labels "context" $) | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- if .Values.autoscaling.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+    kubernetes.io/description: "HPA for Kong API Gateway"
+    {{- if eq .Release.Namespace "production" }}
+    monitoring.dollarfunding.com/priority: "high"
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default (include "api-gateway.fullname" .) }}
+  # Set min/max replicas based on environment
+  {{- if eq .Release.Namespace "production" }}
+  minReplicas: {{ .Values.autoscaling.production.minReplicas | default 3 }}
+  maxReplicas: {{ .Values.autoscaling.production.maxReplicas | default 10 }}
+  {{- else if eq .Release.Namespace "staging" }}
+  minReplicas: {{ .Values.autoscaling.staging.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.autoscaling.staging.maxReplicas | default 5 }}
+  {{- else }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 3 }}
   {{- end }}
-  
   metrics:
-  {{- if (index $autoscaling "targetCPUUtilizationPercentage") }}
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: {{ index $autoscaling "targetCPUUtilizationPercentage" }}
-  {{- end }}
-  {{- if (index $autoscaling "targetMemoryUtilizationPercentage") }}
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: {{ index $autoscaling "targetMemoryUtilizationPercentage" }}
-  {{- end }}
+    # CPU utilization metric - primary scaling metric for Kong
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          {{- if eq .Release.Namespace "production" }}
+          averageUtilization: {{ .Values.autoscaling.production.targetCPUUtilizationPercentage | default 70 }}
+          {{- else if eq .Release.Namespace "staging" }}
+          averageUtilization: {{ .Values.autoscaling.staging.targetCPUUtilizationPercentage | default 75 }}
+          {{- else }}
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 80 }}
+          {{- end }}
+    
+    # Memory utilization metric - secondary scaling metric for Kong
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          {{- if eq .Release.Namespace "production" }}
+          averageUtilization: {{ .Values.autoscaling.production.targetMemoryUtilizationPercentage | default 75 }}
+          {{- else if eq .Release.Namespace "staging" }}
+          averageUtilization: {{ .Values.autoscaling.staging.targetMemoryUtilizationPercentage | default 80 }}
+          {{- else }}
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage | default 85 }}
+          {{- end }}
+    
+    {{- if .Values.autoscaling.enableRequestRateScaling }}
+    # Custom metric for request rate - Kong specific metric
+    - type: Pods
+      pods:
+        metric:
+          name: kong_http_requests_rate
+        target:
+          type: AverageValue
+          {{- if eq .Release.Namespace "production" }}
+          averageValue: {{ .Values.autoscaling.production.targetRequestsPerSecond | default 1000 }}
+          {{- else if eq .Release.Namespace "staging" }}
+          averageValue: {{ .Values.autoscaling.staging.targetRequestsPerSecond | default 500 }}
+          {{- else }}
+          averageValue: {{ .Values.autoscaling.targetRequestsPerSecond | default 200 }}
+          {{- end }}
+    {{- end }}
+    
+    {{- if .Values.autoscaling.customMetrics }}
+    # Additional custom metrics - service-specific metrics
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.customMetrics "context" $) | nindent 4 }}
+    {{- end }}
   
-  {{- if (index $autoscaling "customMetrics") }}
-  {{- range (index $autoscaling "customMetrics") }}
-  - type: {{ .type }}
-    {{- toYaml (omit . "type") | nindent 4 }}
-  {{- end }}
-  {{- end }}
-  
-  {{- if and (index $autoscaling "requestsPerSecond") (not (index $autoscaling "customMetrics")) }}
-  # Custom metric for request rate-based scaling
-  - type: Pods
-    pods:
-      metric:
-        name: http_requests_per_second
-      target:
-        type: AverageValue
-        averageValue: {{ index $autoscaling "requestsPerSecond" }}
+  {{- if .Values.autoscaling.behavior }}
+  # Custom scaling behavior if defined in values
+  behavior:
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.behavior "context" $) | nindent 4 }}
+  {{- else }}
+  # Default scaling behavior optimized for Kong API Gateway
+  behavior:
+    scaleDown:
+      # Longer stabilization window for scale down to prevent flapping
+      # This is important for Kong to maintain connection stability
+      {{- if eq .Release.Namespace "production" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.production.scaleDownStabilizationWindowSeconds | default 300 }}
+      {{- else if eq .Release.Namespace "staging" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.staging.scaleDownStabilizationWindowSeconds | default 180 }}
+      {{- else }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationWindowSeconds | default 120 }}
+      {{- end }}
+      policies:
+      # Scale down conservatively to maintain stability
+      - type: Percent
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleDownPercentage | default 10 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleDownPercentage | default 20 }}
+        {{- end }}
+        periodSeconds: 60
+      # Limit the maximum number of pods to scale down at once
+      - type: Pods
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleDownPods | default 1 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleDownPods | default 2 }}
+        {{- end }}
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # Short stabilization window for scaling up to ensure quick response to load
+      # This helps maintain the 5-minute processing SLA mentioned in section 0.2.6
+      {{- if eq .Release.Namespace "production" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.production.scaleUpStabilizationWindowSeconds | default 0 }}
+      {{- else if eq .Release.Namespace "staging" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.staging.scaleUpStabilizationWindowSeconds | default 30 }}
+      {{- else }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationWindowSeconds | default 60 }}
+      {{- end }}
+      policies:
+      # Scale up aggressively to handle traffic spikes
+      - type: Percent
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleUpPercentage | default 100 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleUpPercentage | default 200 }}
+        {{- end }}
+        periodSeconds: 60
+      # Limit the maximum number of pods to scale up at once
+      - type: Pods
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleUpPods | default 3 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleUpPods | default 5 }}
+        {{- end }}
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
   {{- end }}
 {{- end }}
