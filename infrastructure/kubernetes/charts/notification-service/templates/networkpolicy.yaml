@@ -1,24 +1,30 @@
 {{- /*
-networkpolicy.yaml
+networkpolicy.yaml for Notification Service
 
-This file defines the Kubernetes NetworkPolicy for the Notification Service,
-controlling pod-to-pod communication and external access. It configures:
+This NetworkPolicy defines the ingress and egress rules for the Notification Service,
+controlling pod-to-pod communication and external access. It implements the security
+requirements specified in the MCA Application Processing System technical specification,
+including:
 
-1. Ingress rules to allow traffic from the API Gateway
-2. Ingress rules for RabbitMQ message queue access
-3. Egress rules to allow external webhook delivery
-4. Namespace selectors for cross-namespace communication
-5. Pod selectors for fine-grained access control
-
-This NetworkPolicy implements the security requirements specified in the MCA
-Application Processing System technical specification, including:
 - Network isolation between services (section 8.2.1)
 - Namespace segregation (section 8.2.1)
 - Security considerations (section 0.2.6)
-- Webhook delivery capabilities (section 0.1.4)
-*/}}
+- Network segmentation (section 3.8.3)
+- Webhook delivery security (section 3.8.5)
 
-{{- if .Values.networkPolicy.enabled }}
+The policy allows:
+1. Ingress traffic from the API Gateway (Kong) for webhook configuration and management
+2. Ingress traffic from RabbitMQ for message consumption
+3. Egress traffic to external webhook endpoints for notification delivery
+4. Egress traffic to DNS services for name resolution
+5. Egress traffic to Redis for caching and rate limiting
+
+This ensures that the Notification Service can only communicate with the services it
+needs to interact with, following the principle of least privilege and implementing
+a defense-in-depth approach to security.
+*/
+
+{{- if .Values.networkPolicy.enabled | default true }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,31 +32,25 @@ metadata:
   labels:
     {{- include "common.labels" . | nindent 4 }}
   annotations:
-    description: "Network policy for Notification Service controlling ingress from API Gateway and RabbitMQ, and egress for webhook delivery"
+    description: "Network policy for Notification Service controlling ingress and egress traffic"
 spec:
-  # Apply this policy to notification-service pods
+  # Apply this policy to all pods with the notification-service label
   podSelector:
     matchLabels:
       app.kubernetes.io/name: {{ include "common.name" . }}
   
-  # Apply both ingress and egress policies
+  # Define both ingress and egress policies
   policyTypes:
     - Ingress
     - Egress
   
-  # Ingress rules - control incoming traffic to notification-service pods
+  # Ingress rules - control incoming traffic to the Notification Service
   ingress:
-  {{- if .Values.networkPolicy.ingressRules }}
-    {{- toYaml .Values.networkPolicy.ingressRules | nindent 4 }}
-  {{- else }}
     # Allow traffic from API Gateway (Kong)
     - from:
       - namespaceSelector:
           matchLabels:
-            name: api-gateway
-        podSelector:
-          matchLabels:
-            app.kubernetes.io/name: kong
+            app.kubernetes.io/name: api-gateway
       ports:
       - protocol: TCP
         port: {{ .Values.service.port | default 3000 }}
@@ -59,29 +59,23 @@ spec:
     - from:
       - namespaceSelector:
           matchLabels:
-            name: messaging
-        podSelector:
-          matchLabels:
             app.kubernetes.io/name: rabbitmq
       ports:
       - protocol: TCP
         port: {{ .Values.service.port | default 3000 }}
-    
-    # Allow traffic from other pods in the same namespace
-    # This enables service-to-service communication within the namespace
+        
+    # Allow traffic from Data Service for direct API calls
     - from:
-      - podSelector: {}
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: data-service
       ports:
       - protocol: TCP
         port: {{ .Values.service.port | default 3000 }}
-  {{- end }}
   
-  # Egress rules - control outgoing traffic from notification-service pods
+  # Egress rules - control outgoing traffic from the Notification Service
   egress:
-  {{- if .Values.networkPolicy.egressRules }}
-    {{- toYaml .Values.networkPolicy.egressRules | nindent 4 }}
-  {{- else }}
-    # Allow DNS resolution (required for all network communication)
+    # Allow DNS resolution (required for all services)
     - to:
       - namespaceSelector:
           matchLabels:
@@ -95,75 +89,58 @@ spec:
       - protocol: TCP
         port: 53
     
-    # Allow communication to RabbitMQ for message queue operations
+    # Allow traffic to RabbitMQ for message acknowledgment
     - to:
       - namespaceSelector:
-          matchLabels:
-            name: messaging
-        podSelector:
           matchLabels:
             app.kubernetes.io/name: rabbitmq
       ports:
       - protocol: TCP
-        port: 5672  # Standard AMQP port
-      - protocol: TCP
-        port: 5671  # AMQP over TLS
+        port: {{ .Values.env.RABBITMQ_PORT | default 5672 }}
     
-    # Allow communication to Redis for caching
+    # Allow traffic to Redis for caching and rate limiting
     - to:
       - namespaceSelector:
-          matchLabels:
-            name: cache
-        podSelector:
           matchLabels:
             app.kubernetes.io/name: redis
       ports:
       - protocol: TCP
-        port: 6379  # Standard Redis port
+        port: {{ .Values.env.REDIS_PORT | default 6379 }}
     
-    # Allow communication to other services in the same namespace
-    - to:
-      - podSelector: {}
-    
-    # Allow external webhook delivery to the internet
-    # This is critical for the notification service to deliver webhooks to external endpoints
+    # Allow traffic to external webhook endpoints
+    # This is required for the Notification Service to deliver webhooks to external systems
+    # as specified in section 3.8.5 (Webhook and Notification Security)
     - to:
       - ipBlock:
-          # Allow all external IPs
           cidr: 0.0.0.0/0
-          # Exclude private IP ranges to prevent access to internal services
-          # that aren't explicitly allowed above
+          # Exclude internal cluster IPs
           except:
-          - 10.0.0.0/8     # Private network
-          - 172.16.0.0/12  # Private network
-          - 192.168.0.0/16 # Private network
+          - 10.0.0.0/8     # Private network range
+          - 172.16.0.0/12  # Private network range
+          - 192.168.0.0/16 # Private network range
+          - 169.254.0.0/16 # Link-local addresses
+          - 127.0.0.0/8    # Localhost
       ports:
       - protocol: TCP
-        port: 443   # HTTPS
+        port: 443  # HTTPS (preferred for production)
       - protocol: TCP
-        port: 80    # HTTP
-  {{- end }}
+        port: 80   # HTTP (for development/testing only)
 {{- end }}
 
 {{- /*
-Create a default deny-all policy for additional security
-This follows the security best practice of denying all traffic by default
-and only allowing specific traffic that is explicitly permitted.
+Create a policy to allow health check probes from the Kubernetes control plane
+This is required for liveness and readiness probes to work properly
 */}}
-{{- /*
-Create a policy to allow Kubernetes API server to access webhook endpoints
-This is necessary for validating webhooks and admission controllers to function properly
-*/}}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.allowApiServer }}
+{{- if .Values.networkPolicy.enabled | default true }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "common.fullname" . }}-allow-apiserver
+  name: {{ include "common.fullname" . }}-allow-health-probes
   labels:
     {{- include "common.labels" . | nindent 4 }}
   annotations:
-    description: "Allow Kubernetes API server to access webhook endpoints"
+    description: "Allow health check probes from Kubernetes control plane"
 spec:
   podSelector:
     matchLabels:
@@ -171,37 +148,33 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Allow traffic from Kubernetes API server
+    # Allow health check probes from the Kubernetes control plane
+    # This is required for liveness and readiness probes to work properly
     - from:
-      {{- if .Values.networkPolicy.apiServerCIDRs }}
-      {{- range .Values.networkPolicy.apiServerCIDRs }}
-      - ipBlock:
-          cidr: {{ . }}
-      {{- end }}
-      {{- else }}
-      # If no specific CIDRs are provided, allow from control plane
-      - ipBlock:
-          cidr: 0.0.0.0/0
-      {{- end }}
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            k8s-app: kube-proxy
       ports:
       - protocol: TCP
         port: {{ .Values.service.port | default 3000 }}
 {{- end }}
 
 {{- /*
-Create a policy to allow monitoring tools to scrape metrics
-This is necessary for observability and monitoring of the service
+Create a policy to allow metrics collection for monitoring
+This is required for Prometheus metrics scraping and monitoring
+as specified in section 0.2.5 (Monitoring and Logging Considerations)
 */}}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.allowMonitoring }}
+{{- if and .Values.networkPolicy.enabled .Values.metrics.enabled | default false }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "common.fullname" . }}-allow-monitoring
+  name: {{ include "common.fullname" . }}-allow-metrics
   labels:
     {{- include "common.labels" . | nindent 4 }}
   annotations:
-    description: "Allow monitoring tools to scrape metrics from the Notification Service"
+    description: "Allow metrics collection for monitoring"
 spec:
   podSelector:
     matchLabels:
@@ -209,43 +182,15 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Allow traffic from monitoring namespace (Prometheus, etc.)
+    # Allow Prometheus to scrape metrics
     - from:
       - namespaceSelector:
           matchLabels:
-            name: monitoring
-        {{- if .Values.networkPolicy.monitoringPodLabels }}
+            app.kubernetes.io/name: monitoring
         podSelector:
           matchLabels:
-            {{- toYaml .Values.networkPolicy.monitoringPodLabels | nindent 12 }}
-        {{- end }}
+            app.kubernetes.io/name: prometheus
       ports:
       - protocol: TCP
-        port: {{ .Values.service.port | default 3000 }}
-        # Target the metrics endpoint specifically
-        endPort: {{ .Values.service.port | default 3000 }}
-{{- end }}
-
-{{- /*
-Create a default deny-all policy for additional security
-This follows the security best practice of denying all traffic by default
-and only allowing specific traffic that is explicitly permitted.
-*/}}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDeny }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "common.fullname" . }}-default-deny
-  labels:
-    {{- include "common.labels" . | nindent 4 }}
-  annotations:
-    description: "Default deny-all policy for Notification Service as a security baseline"
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: {{ include "common.name" . }}
-  policyTypes:
-    - Ingress
-    - Egress
+        port: {{ .Values.metrics.port | default 9090 }}
 {{- end }}
