@@ -1,73 +1,50 @@
+{{- /*
+Kubernetes Ingress manifest template for external access to the Kong API Gateway.
+This template defines the Ingress resource that routes external HTTP/HTTPS traffic to the Kong service.
+It configures hostnames, paths, TLS settings, and annotations for ingress controller-specific features.
+*/}}
+
+{{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "api-gateway.fullname" . }}
+  name: {{ include "kong.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "api-gateway.labels" . | nindent 4 }}
+    {{- include "kong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
   annotations:
-    # Enable TLS termination
-    konghq.com/protocols: "https"
-    # Rate limiting configuration for abuse prevention
+    # Kong-specific annotations
+    konghq.com/strip-path: {{ .Values.ingress.kong.stripPath | default "true" | quote }}
+    konghq.com/preserve-host: {{ .Values.ingress.kong.preserveHost | default "true" | quote }}
+    konghq.com/protocols: {{ .Values.ingress.kong.protocols | default "https,http" | quote }}
+    
+    # TLS and Security annotations
+    {{- if .Values.ingress.tls.enabled }}
+    kubernetes.io/tls-acme: {{ .Values.ingress.tls.acme | default "true" | quote }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | default "letsencrypt-prod" | quote }}
+    {{- end }}
+    
+    # Plugin annotations - combining multiple plugins with a comma-separated list
     konghq.com/plugins: |
-      {{ if .Values.ingress.rateLimit.enabled }}
-      - name: rate-limiting
-        config:
-          second: {{ .Values.ingress.rateLimit.perSecond | default 5 }}
-          minute: {{ .Values.ingress.rateLimit.perMinute | default 100 }}
-          hour: {{ .Values.ingress.rateLimit.perHour | default 1000 }}
-          policy: {{ .Values.ingress.rateLimit.policy | default "local" }}
-          fault_tolerant: true
-          hide_client_headers: false
-          redis_host: {{ .Values.ingress.rateLimit.redis.host | default "redis" }}
-          redis_port: {{ .Values.ingress.rateLimit.redis.port | default 6379 }}
-          redis_password: {{ .Values.ingress.rateLimit.redis.password | default "" }}
-          redis_timeout: {{ .Values.ingress.rateLimit.redis.timeout | default 2000 }}
-      {{ end }}
-      # Security headers plugin for all responses
-      - name: response-transformer
-        config:
-          add:
-            headers:
-              - "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
-              - "X-Content-Type-Options: nosniff"
-              - "X-XSS-Protection: 1; mode=block"
-              - "X-Frame-Options: DENY"
-              - "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-ancestors 'none'; connect-src 'self'"
-              - "Referrer-Policy: strict-origin-when-cross-origin"
-              - "Permissions-Policy: geolocation=(), microphone=(), camera=()"
-    # Preserve client IP
-    konghq.com/preserve-client-ip: "true"
-    # Enable CORS if configured
-    {{ if .Values.ingress.cors.enabled }}
-    konghq.com/cors-plugin: |
-      - name: cors
-        config:
-          origins: {{ .Values.ingress.cors.origins | default "*" | quote }}
-          methods: {{ .Values.ingress.cors.methods | default "GET, POST, PUT, PATCH, DELETE, OPTIONS" | quote }}
-          headers: {{ .Values.ingress.cors.headers | default "Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Auth-Token, Authorization" | quote }}
-          exposed_headers: {{ .Values.ingress.cors.exposedHeaders | default "" | quote }}
-          credentials: {{ .Values.ingress.cors.credentials | default false }}
-          max_age: {{ .Values.ingress.cors.maxAge | default 3600 }}
-    {{ end }}
-    # Path rewrite support
-    {{ if .Values.ingress.rewrite.enabled }}
-    konghq.com/rewrite: "{{ .Values.ingress.rewrite.target }}"
-    {{ end }}
-    # Redirect support
-    {{ if .Values.ingress.redirect.enabled }}
-    konghq.com/https-redirect-status-code: "{{ .Values.ingress.redirect.statusCode | default 301 }}"
-    {{ end }}
+      {{ .Values.ingress.kong.securityHeadersPlugin | default "security-headers" }},
+      {{ .Values.ingress.kong.rateLimitingPlugin | default "rate-limiting" }},
+      {{ .Values.ingress.kong.corsPlugin | default "cors" }}
+      {{- if .Values.ingress.rewrite.enabled }},{{ .Values.ingress.kong.rewritePlugin | default "request-transformer" }}{{- end }}
+    
+    # Additional custom annotations
+    {{- if .Values.ingress.annotations }}
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- end }}
 spec:
-  ingressClassName: {{ .Values.ingress.className | default "kong" }}
-  {{ if .Values.ingress.tls.enabled }}
+  {{- if .Values.ingress.tls.enabled }}
   tls:
     - hosts:
         {{- range .Values.ingress.hosts }}
         - {{ .host | quote }}
         {{- end }}
-      secretName: {{ .Values.ingress.tls.secretName }}
-  {{ end }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" (include "kong.fullname" .)) }}
+  {{- end }}
   rules:
     {{- range .Values.ingress.hosts }}
     - host: {{ .host | quote }}
@@ -78,16 +55,103 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ $.Values.ingress.serviceName | default (include "api-gateway.fullname" $) }}
+                name: {{ include "kong.fullname" $ }}-proxy
                 port:
-                  number: {{ $.Values.ingress.servicePort | default 80 }}
+                  number: {{ $.Values.proxy.http.servicePort | default 80 }}
           {{- end }}
     {{- end }}
-  # Default backend for handling errors
-  {{ if .Values.ingress.defaultBackend.enabled }}
+    {{- if .Values.ingress.defaultBackend }}
   defaultBackend:
     service:
-      name: {{ .Values.ingress.defaultBackend.serviceName }}
+      name: {{ .Values.ingress.defaultBackend.service.name }}
       port:
-        number: {{ .Values.ingress.defaultBackend.servicePort | default 80 }}
-  {{ end }}
+        number: {{ .Values.ingress.defaultBackend.service.port }}
+    {{- end }}
+{{- end }}
+
+{{- /* Define KongPlugin resources for the Ingress */}}
+{{- if .Values.ingress.enabled }}
+
+{{- /* Security Headers Plugin */}}
+{{- if .Values.ingress.kong.plugins.securityHeaders.enabled | default true }}
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ .Values.ingress.kong.securityHeadersPlugin | default "security-headers" }}
+  namespace: {{ .Release.Namespace }}
+config:
+  add_headers:
+    - X-Frame-Options: {{ .Values.ingress.kong.plugins.securityHeaders.xFrameOptions | default "DENY" }}
+    - X-Content-Type-Options: {{ .Values.ingress.kong.plugins.securityHeaders.xContentTypeOptions | default "nosniff" }}
+    - X-XSS-Protection: {{ .Values.ingress.kong.plugins.securityHeaders.xXssProtection | default "1; mode=block" }}
+    - Strict-Transport-Security: {{ .Values.ingress.kong.plugins.securityHeaders.strictTransportSecurity | default "max-age=31536000; includeSubDomains" }}
+    - Content-Security-Policy: {{ .Values.ingress.kong.plugins.securityHeaders.contentSecurityPolicy | default "default-src 'self'; script-src 'self'; object-src 'none'" }}
+    - Referrer-Policy: {{ .Values.ingress.kong.plugins.securityHeaders.referrerPolicy | default "strict-origin-when-cross-origin" }}
+plugin: response-transformer
+{{- end }}
+
+{{- /* Rate Limiting Plugin */}}
+{{- if .Values.ingress.kong.plugins.rateLimiting.enabled | default true }}
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ .Values.ingress.kong.rateLimitingPlugin | default "rate-limiting" }}
+  namespace: {{ .Release.Namespace }}
+config:
+  second: {{ .Values.ingress.kong.plugins.rateLimiting.perSecond | default 10 }}
+  minute: {{ .Values.ingress.kong.plugins.rateLimiting.perMinute | default 60 }}
+  hour: {{ .Values.ingress.kong.plugins.rateLimiting.perHour | default 1000 }}
+  day: {{ .Values.ingress.kong.plugins.rateLimiting.perDay | default 10000 }}
+  policy: {{ .Values.ingress.kong.plugins.rateLimiting.policy | default "local" }}
+  fault_tolerant: {{ .Values.ingress.kong.plugins.rateLimiting.faultTolerant | default true }}
+  hide_client_headers: {{ .Values.ingress.kong.plugins.rateLimiting.hideClientHeaders | default false }}
+  redis_host: {{ .Values.ingress.kong.plugins.rateLimiting.redisHost | default "" }}
+  redis_port: {{ .Values.ingress.kong.plugins.rateLimiting.redisPort | default 6379 }}
+  redis_password: {{ .Values.ingress.kong.plugins.rateLimiting.redisPassword | default "" }}
+  redis_database: {{ .Values.ingress.kong.plugins.rateLimiting.redisDatabase | default 0 }}
+plugin: rate-limiting
+{{- end }}
+
+{{- /* CORS Plugin */}}
+{{- if .Values.ingress.kong.plugins.cors.enabled | default true }}
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ .Values.ingress.kong.corsPlugin | default "cors" }}
+  namespace: {{ .Release.Namespace }}
+config:
+  origins: {{ .Values.ingress.kong.plugins.cors.origins | default "*" | quote }}
+  methods: {{ .Values.ingress.kong.plugins.cors.methods | default "GET, PUT, POST, PATCH, DELETE, OPTIONS" | quote }}
+  headers: {{ .Values.ingress.kong.plugins.cors.headers | default "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization" | quote }}
+  exposed_headers: {{ .Values.ingress.kong.plugins.cors.exposedHeaders | default "Content-Length,Content-Range" | quote }}
+  max_age: {{ .Values.ingress.kong.plugins.cors.maxAge | default 3600 }}
+  credentials: {{ .Values.ingress.kong.plugins.cors.credentials | default false }}
+  preflight_continue: {{ .Values.ingress.kong.plugins.cors.preflightContinue | default false }}
+plugin: cors
+{{- end }}
+
+{{- /* Request Transformer Plugin for Path Rewrites */}}
+{{- if and .Values.ingress.rewrite.enabled (.Values.ingress.kong.plugins.requestTransformer.enabled | default true) }}
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: {{ .Values.ingress.kong.rewritePlugin | default "request-transformer" }}
+  namespace: {{ .Release.Namespace }}
+config:
+  http_method: {{ .Values.ingress.kong.plugins.requestTransformer.httpMethod | default "" }}
+  remove:
+    headers: {{ .Values.ingress.kong.plugins.requestTransformer.remove.headers | default "[]" }}
+    querystring: {{ .Values.ingress.kong.plugins.requestTransformer.remove.querystring | default "[]" }}
+  replace:
+    uri: {{ .Values.ingress.rewrite.target | default "/$1" }}
+  add:
+    headers: {{ .Values.ingress.kong.plugins.requestTransformer.add.headers | default "[]" }}
+    querystring: {{ .Values.ingress.kong.plugins.requestTransformer.add.querystring | default "[]" }}
+plugin: request-transformer
+{{- end }}
+
+{{- end }}
