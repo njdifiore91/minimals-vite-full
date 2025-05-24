@@ -2,7 +2,7 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Notification Service image configuration
+# Image configuration for the Notification Service
 image:
   repository: dollarfunding/notification-service
   tag: latest
@@ -11,7 +11,7 @@ image:
 # Number of replicas to deploy
 replicaCount: 2
 
-# Pod resource requests and limits
+# Resource limits and requests
 resources:
   limits:
     cpu: 500m
@@ -20,81 +20,84 @@ resources:
     cpu: 200m
     memory: 256Mi
 
-# Horizontal Pod Autoscaler configuration
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
-
 # Service configuration
 service:
   type: ClusterIP
   port: 3000
   annotations: {}
 
-# Ingress configuration for API Gateway integration
-ingress:
-  enabled: true
-  annotations:
-    kubernetes.io/ingress.class: kong
-    konghq.com/strip-path: "true"
-    konghq.com/protocols: "https"
-    konghq.com/https-redirect-status-code: "301"
-    konghq.com/plugins: notification-rate-limiting,notification-cors,notification-jwt-auth
-  hosts:
-    - host: api.dollarfunding.com
-      paths:
-        - path: /api/v1/webhooks
-          pathType: Prefix
-  tls:
-    - secretName: api-tls-cert
-      hosts:
-        - api.dollarfunding.com
-
-# Network policy configuration
-networkPolicy:
-  enabled: true
-  ingressRules:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: api-gateway
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: kong
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: messaging
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: rabbitmq
-  egressRules:
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
+# Pod annotations
+podAnnotations: {}
 
 # Pod security context
-securityContext:
-  runAsUser: 1000
-  runAsGroup: 1000
-  fsGroup: 1000
-  readOnlyRootFilesystem: true
+podSecurityContext: {}
 
 # Container security context
-containerSecurityContext:
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
   allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
+  readOnlyRootFilesystem: true
 
-# Liveness and readiness probe configuration
+# Horizontal Pod Autoscaler configuration
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Environment variables for the Notification Service
+env:
+  # General application settings
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  SERVICE_NAME: "notification-service"
+  PORT: "3000"
+  
+  # RabbitMQ connection settings
+  RABBITMQ_HOST: "rabbitmq"
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_USERNAME: "notification-service"
+  RABBITMQ_VHOST: "/"
+  RABBITMQ_EXCHANGE: "mca.documents"
+  RABBITMQ_QUEUE: "notification"
+  RABBITMQ_USE_TLS: "true"
+  
+  # Redis connection settings
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_USE_TLS: "true"
+  REDIS_DATA_TTL: "900" # 15 minutes in seconds
+  REDIS_SESSION_TTL: "86400" # 24 hours in seconds
+  
+  # Webhook delivery settings
+  WEBHOOK_MAX_RETRIES: "5"
+  WEBHOOK_INITIAL_RETRY_DELAY: "5000" # 5 seconds in milliseconds
+  WEBHOOK_MAX_RETRY_DELAY: "3600000" # 1 hour in milliseconds
+  WEBHOOK_TIMEOUT: "10000" # 10 seconds in milliseconds
+  WEBHOOK_SIGNATURE_ALGORITHM: "sha256"
+
+# Secret environment variables (to be stored in Kubernetes secrets)
+secrets:
+  RABBITMQ_PASSWORD: ""
+  RABBITMQ_CLIENT_CERT: ""
+  RABBITMQ_CLIENT_KEY: ""
+  RABBITMQ_CA_CERT: ""
+  REDIS_PASSWORD: ""
+  REDIS_CA_CERT: ""
+  WEBHOOK_SIGNATURE_SECRET: ""
+
+# Liveness probe configuration
 livenessProbe:
   httpGet:
     path: /health
@@ -104,48 +107,39 @@ livenessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
 
+# Readiness probe configuration
 readinessProbe:
   httpGet:
     path: /health/ready
     port: http
-  initialDelaySeconds: 15
+  initialDelaySeconds: 10
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
 
-# Environment variables for the Notification Service
-env:
-  # Common environment variables
-  common:
-    NODE_ENV: "production"
-    SERVICE_NAME: "notification-service"
-    LOG_LEVEL: "info"
-    PORT: 3000
-    
-    # RabbitMQ configuration
-    RABBITMQ_ENABLED: "true"
-    RABBITMQ_QUEUE: "notification"
-    RABBITMQ_EXCHANGE: "mca.documents"
-    RABBITMQ_EXCHANGE_TYPE: "fanout"
-    RABBITMQ_PREFETCH_COUNT: "10"
-    
-    # Redis configuration
-    REDIS_ENABLED: "true"
-    REDIS_TTL_DATA: "900" # 15 minutes in seconds
-    REDIS_TTL_SESSION: "86400" # 24 hours in seconds
-    
-    # Webhook configuration
-    WEBHOOK_RETRY_ENABLED: "true"
-    WEBHOOK_RETRY_MAX_ATTEMPTS: "5"
-    WEBHOOK_RETRY_INITIAL_INTERVAL: "1000" # 1 second in milliseconds
-    WEBHOOK_RETRY_MULTIPLIER: "2" # Exponential backoff multiplier
-    WEBHOOK_RETRY_MAX_INTERVAL: "60000" # 1 minute in milliseconds
-    WEBHOOK_TIMEOUT: "5000" # 5 seconds in milliseconds
-    WEBHOOK_SIGNATURE_ALGORITHM: "sha256"
+# Ingress configuration
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/strip-path: "true"
+    konghq.com/protocols: "https"
+    konghq.com/https-redirect-status-code: "301"
+    konghq.com/plugins: |
+      jwt-auth,rate-limiting,cors
+  hosts:
+    - host: api.dollarfunding.com
+      paths:
+        - path: /api/v1/webhooks
+          pathType: Prefix
+  tls:
+    - secretName: api-tls
+      hosts:
+        - api.dollarfunding.com
 
 # Environment-specific overrides
 environments:
-  # Development environment
+  # Development environment settings
   development:
     replicaCount: 1
     resources:
@@ -160,18 +154,27 @@ environments:
     env:
       NODE_ENV: "development"
       LOG_LEVEL: "debug"
-      RABBITMQ_HOST: "rabbitmq.messaging.svc.cluster.local"
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USERNAME: "notification_dev"
-      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}" # Replaced from Secret
-      REDIS_HOST: "redis.cache.svc.cluster.local"
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}" # Replaced from Secret
-      WEBHOOK_SIGNATURE_SECRET: "${WEBHOOK_SIGNATURE_SECRET}" # Replaced from Secret
-
-  # Staging environment
+      RABBITMQ_USE_TLS: "false"
+      REDIS_USE_TLS: "false"
+      WEBHOOK_MAX_RETRIES: "3"
+  
+  # Staging environment settings
   staging:
     replicaCount: 2
+    resources:
+      limits:
+        cpu: 400m
+        memory: 448Mi
+      requests:
+        cpu: 150m
+        memory: 192Mi
+    env:
+      LOG_LEVEL: "info"
+      WEBHOOK_MAX_RETRIES: "4"
+  
+  # Production environment settings
+  production:
+    replicaCount: 3
     resources:
       limits:
         cpu: 500m
@@ -180,92 +183,9 @@ environments:
         cpu: 200m
         memory: 256Mi
     autoscaling:
-      enabled: true
-      minReplicas: 2
-      maxReplicas: 5
-    env:
-      NODE_ENV: "staging"
-      LOG_LEVEL: "info"
-      RABBITMQ_HOST: "rabbitmq.messaging.svc.cluster.local"
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USERNAME: "notification_staging"
-      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}" # Replaced from Secret
-      RABBITMQ_USE_TLS: "true"
-      REDIS_HOST: "redis.cache.svc.cluster.local"
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}" # Replaced from Secret
-      REDIS_USE_TLS: "true"
-      WEBHOOK_SIGNATURE_SECRET: "${WEBHOOK_SIGNATURE_SECRET}" # Replaced from Secret
-
-  # Production environment
-  production:
-    replicaCount: 3
-    resources:
-      limits:
-        cpu: 1000m
-        memory: 1Gi
-      requests:
-        cpu: 500m
-        memory: 512Mi
-    autoscaling:
-      enabled: true
       minReplicas: 3
-      maxReplicas: 10
+      maxReplicas: 15
+      targetCPUUtilizationPercentage: 75
     env:
-      NODE_ENV: "production"
       LOG_LEVEL: "info"
-      RABBITMQ_HOST: "rabbitmq.messaging.svc.cluster.local"
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USERNAME: "notification_prod"
-      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}" # Replaced from Secret
-      RABBITMQ_USE_TLS: "true"
-      REDIS_HOST: "redis.cache.svc.cluster.local"
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}" # Replaced from Secret
-      REDIS_USE_TLS: "true"
-      WEBHOOK_SIGNATURE_SECRET: "${WEBHOOK_SIGNATURE_SECRET}" # Replaced from Secret
-
-# Volume mounts for configuration and secrets
-volumeMounts:
-  - name: tmp
-    mountPath: /tmp
-  - name: config
-    mountPath: /app/config
-  - name: secrets
-    mountPath: /app/secrets
-    readOnly: true
-
-# Volumes for configuration and secrets
-volumes:
-  - name: tmp
-    emptyDir: {}
-  - name: config
-    configMap:
-      name: notification-service-config
-  - name: secrets
-    secret:
-      secretName: notification-service-secrets
-
-# Service account configuration
-serviceAccount:
-  create: true
-  annotations: {}
-  name: "notification-service"
-
-# Pod annotations
-podAnnotations:
-  prometheus.io/scrape: "true"
-  prometheus.io/port: "3000"
-  prometheus.io/path: "/metrics"
-
-# Pod labels
-podLabels: {}
-
-# Node selector
-nodeSelector: {}
-
-# Tolerations
-tolerations: []
-
-# Affinity
-affinity: {}
+      WEBHOOK_MAX_RETRIES: "5"
