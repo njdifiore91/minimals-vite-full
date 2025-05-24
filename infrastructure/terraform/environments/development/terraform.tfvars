@@ -1,70 +1,51 @@
-# Variable values for the MCA Application Processing System - Development Environment
+# terraform.tfvars for MCA Application Processing System - Development Environment
+# Contains environment-specific variable values for the development infrastructure
 
 # Region configuration
-aws_region     = "us-east-2"  # Development region
-replica_region = "us-west-1"  # Not used in development but kept for module compatibility
-
-# Database configuration - PostgreSQL 14
-db_name = "mca_development"
-# db_username and db_password should be provided via environment variables or secure secrets management
-db_instance_class = "db.t3.micro"  # Smallest instance size for development
-db_allocated_storage = 20  # GB
-db_max_allocated_storage = 50  # GB
-db_replica_count = 0  # No read replicas for development
-
-# RabbitMQ configuration
-rabbitmq_instance_type = "t3.micro"  # Smallest instance size for development
-rabbitmq_node_count = 1  # Single node for development
-rabbitmq_exchanges = ["mca.documents"]  # Fanout exchange
-rabbitmq_queues = ["document-processing", "data-extraction", "notification"]
-
-# Redis configuration
-redis_instance_type = "cache.t3.micro"  # Smallest instance size for development
-redis_node_count = 1  # Single node for development
-redis_data_ttl = 15  # Minutes for application data (same as other environments)
-redis_session_ttl = 1440  # Minutes (24 hours) for user sessions (same as other environments)
-
-# S3 Storage configuration
-s3_bucket_name = "mca-documents-development"  # Development-specific bucket name
-s3_versioning_enabled = true
-s3_encryption_enabled = true  # AES-256 encryption
+aws_region     = "us-east-1"
+replica_region = "us-west-2"  # Not used in development but kept for module compatibility
 
 # Network configuration
-# These values would be specific to your AWS account and VPC setup
-# vpc_id = "vpc-0123456789abcdef0"
-# subnet_ids = ["subnet-0123456789abcdef0"]
+vpc_id      = "vpc-dev01234567890"  # Development VPC ID
+subnet_ids  = ["subnet-dev0123a", "subnet-dev0123b"]  # Development subnet IDs
 
-# High availability configuration
-multi_az_enabled = false  # No high availability for development
+# Database configuration
+db_name     = "mca_development"
+db_username = "mca_dev"
+db_password = "Dev_Password_123!"  # Should be replaced with a secure password or secret management
+
+# RabbitMQ configuration
+rabbitmq_username = "mca_dev"
+rabbitmq_password = "Dev_RabbitMQ_123!"  # Should be replaced with a secure password or secret management
+
+# Redis configuration
+redis_auth_token = "Dev_Redis_Token_123!"  # Should be replaced with a secure token or secret management
+
+# S3 configuration
+s3_force_destroy = true  # Allow force destroy in development for easier cleanup
+
+# Monitoring configuration - simplified for development
+enable_enhanced_monitoring = false
+monitoring_interval_seconds = 60  # Less frequent monitoring for development
+
+# High availability configuration - disabled for development
+multi_az_enabled = false  # Single AZ for development to reduce costs
 
 # Backup configuration
-backup_window      = "02:00-04:00"  # 2-4 AM UTC
-maintenance_window = "sun:04:00-sun:06:00"  # Sunday 4-6 AM UTC
-backup_retention_period = 7  # Days (shorter for development)
+backup_window = "03:00-05:00"  # 3-5 AM UTC
+maintenance_window = "sun:05:00-sun:07:00"  # Sunday 5-7 AM UTC
 
 # Security configuration
 enable_encryption = true  # Keep encryption enabled even in development
 enable_deletion_protection = false  # No deletion protection for development
 
-# Monitoring configuration
-enable_enhanced_monitoring = false  # Basic monitoring for development
-monitoring_interval_seconds = 60  # Less frequent for development
-enable_performance_insights = false  # No performance insights for development
-performance_insights_retention_period = 7  # Days
-
-# Kubernetes configuration
-k8s_node_instance_type = "t3.small"  # Smallest instance size for development
-k8s_node_count_min = 1  # Minimum nodes
-k8s_node_count_max = 3  # Maximum nodes for auto-scaling
-
-# GPU configuration for OCR service
-gpu_enabled = false  # No GPU for development environment
-gpu_instance_type = ""  # No GPU instance type needed
+# Performance configuration - simplified for development
+enable_performance_insights = false
+performance_insights_retention_period = 7  # 7 days retention
 
 # Additional tags
 additional_tags = {
-  Environment  = "Development"
-  BusinessUnit = "Funding"
-  CostCenter   = "MCA-003"
-  Owner        = "developers@dollarfunding.com"
+  Owner       = "Development Team"
+  CostCenter  = "DevOps"
+  Application = "MCA Processing System"
 }
