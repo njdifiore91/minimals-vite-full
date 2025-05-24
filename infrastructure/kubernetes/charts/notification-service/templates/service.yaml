@@ -1,20 +1,16 @@
 {{- /*
 service.yaml: Kubernetes Service for the Notification Service
 
-This template creates a Kubernetes Service resource that exposes the Notification Service
-within the cluster. It configures port 3000 for the Node.js notification service and
-sets appropriate session affinity for webhook delivery consistency.
-
-The Notification Service handles webhooks and alerts as specified in section 0.1.2 of the
-technical specification. It provides configurable endpoints with JSON payload delivery
-as specified in section 0.1.4.
+This template creates a Kubernetes Service resource to expose the Notification Service within the cluster.
+It configures the service port, type, and selectors to enable other services to communicate with the
+Notification Service API endpoints for webhook configuration and management.
 
 Key features:
-- Handles status updates and constructs notification payloads
-- Delivers notifications to configured webhooks and endpoints
-- Implements retry mechanisms with exponential backoff
-- Secures webhook payloads with HMAC signatures
-- Supports multiple notification channels (webhook, email, SMS, push)
+- Exposes port 3000 for the Node.js notification service
+- Uses ClusterIP type for internal cluster access
+- Configures selector to match notification-service deployment labels
+- Supports annotations for service discovery if needed
+- Configures session affinity for webhook delivery consistency
 */}}
 
 apiVersion: v1
@@ -23,49 +19,44 @@ metadata:
   name: {{ include "common.names.fullname" . }}
   labels:
     {{- include "common.labels.standard" . | nindent 4 }}
-    app.kubernetes.io/component: webhook-service
-    app.kubernetes.io/part-of: mca-processing-system
+    app.kubernetes.io/component: notification-service
     {{- if .Values.service.labels }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
     {{- end }}
-  {{- if or .Values.service.annotations .Values.commonAnnotations }}
+  {{- if .Values.service.annotations }}
   annotations:
-    # Add service discovery annotations
-    prometheus.io/scrape: "{{ .Values.metrics.enabled | default "false" }}"
-    prometheus.io/port: "{{ .Values.metrics.port | default "9090" }}"
-    {{- if .Values.service.annotations }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
-    {{- end }}
-    {{- if .Values.commonAnnotations }}
-    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
-    {{- end }}
   {{- end }}
 spec:
   type: {{ .Values.service.type | default "ClusterIP" }}
-  {{- if .Values.service.sessionAffinity.enabled | default true }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- else }}
   # Enable session affinity for consistent webhook delivery
-  # This ensures that webhook retries go to the same pod that has the delivery state
   sessionAffinity: ClientIP
-  {{- if .Values.service.sessionAffinity.timeoutSeconds }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.sessionAffinityConfig "context" $) | nindent 4 }}
+  {{- else }}
   sessionAffinityConfig:
     clientIP:
-      timeoutSeconds: {{ .Values.service.sessionAffinity.timeoutSeconds | default 10800 }}
-  {{- end }}
+      timeoutSeconds: 10800  # 3 hours
   {{- end }}
   ports:
     - name: http
       port: {{ .Values.service.port | default 3000 }}
-      targetPort: {{ .Values.service.targetPort | default "http" }}
+      targetPort: {{ .Values.service.targetPort | default .Values.service.port | default 3000 }}
       protocol: TCP
-    {{- if .Values.metrics.enabled | default false }}
+    {{- if .Values.metrics.enabled }}
     - name: metrics
-      port: {{ .Values.metrics.port | default 9090 }}
-      targetPort: metrics
+      port: 9090
+      targetPort: 9090
       protocol: TCP
     {{- end }}
   selector:
     {{- include "common.labels.matchLabels" . | nindent 4 }}
-    app.kubernetes.io/component: webhook-service
+    app.kubernetes.io/component: notification-service
     {{- if .Values.service.selector }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
     {{- end }}
