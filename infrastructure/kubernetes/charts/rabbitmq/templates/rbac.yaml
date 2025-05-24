@@ -1,38 +1,40 @@
+# RBAC resources for RabbitMQ pods to interact with the Kubernetes API
+# These resources grant the RabbitMQ pods the necessary permissions to discover other pods
+# in the cluster for node clustering, following the principle of least privilege.
+
+{{- if .Values.rbac.create -}}
 ---
 # ServiceAccount for RabbitMQ pods
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "rabbitmq.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "rabbitmq.serviceAccountName" . }}
   labels:
     {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
   annotations:
-    # Security scanning annotation to indicate this resource has been reviewed
-    security.kubernetes.io/reviewed-by: "infrastructure-team"
-    # Indicate that this ServiceAccount requires minimal permissions
-    security.kubernetes.io/privileged: "false"
+    # Security scanning annotation
+    security.kubernetes.io/critical-pod: "true"
+    {{- with .Values.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 ---
-# Role with permissions for RabbitMQ pod discovery and clustering
+# Role with permissions to get, list, and watch endpoints
+# These are the minimum permissions needed for RabbitMQ clustering
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "rabbitmq.fullname" . }}
-  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "rabbitmq.labels" . | nindent 4 }}
-  annotations:
-    # Security scanning annotation to indicate this resource has been reviewed
-    security.kubernetes.io/reviewed-by: "infrastructure-team"
-    # Document the purpose of this role for security audits
-    security.kubernetes.io/purpose: "RabbitMQ pod discovery for clustering"
+    app.kubernetes.io/component: message-broker
 rules:
-  # Permissions required for RabbitMQ pod discovery and clustering
-  - apiGroups: [""] # "" indicates the core API group
+  # Allow RabbitMQ pods to discover other pods for clustering
+  - apiGroups: [""]
     resources: ["endpoints"]
     verbs: ["get", "list", "watch"]
-  # Additional permissions for pod discovery if needed
-  - apiGroups: [""] 
+  # Allow RabbitMQ pods to get pod information for clustering
+  - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
 ---
@@ -41,17 +43,15 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "rabbitmq.fullname" . }}
-  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "rabbitmq.labels" . | nindent 4 }}
-  annotations:
-    # Security scanning annotation to indicate this resource has been reviewed
-    security.kubernetes.io/reviewed-by: "infrastructure-team"
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "rabbitmq.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    app.kubernetes.io/component: message-broker
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "rabbitmq.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rabbitmq.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}
