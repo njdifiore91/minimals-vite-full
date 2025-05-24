@@ -1,387 +1,408 @@
-# RabbitMQ Cluster Configuration for MCA Application Processing System
-#
-# This file defines the infrastructure for a highly available RabbitMQ cluster
-# with 3 nodes distributed across multiple availability zones. It implements
-# quorum-based consensus for queue replication and automatic failover.
-#
-# Key features:
-# - 3-node cluster for high availability (minimum for quorum)
-# - Cross-AZ deployment for resilience against zone failures
-# - Automatic failover with leader election via Raft consensus
-# - Message replication across nodes with quorum queues
-# - Partition tolerance and recovery strategies
-# - Monitoring and health check endpoints
-#
-# This implementation follows RabbitMQ best practices for high availability:
-# - Uses quorum queues instead of classic mirrored queues for better reliability
-# - Implements proper partition handling strategy
-# - Configures cross-AZ deployment for resilience
-# - Sets up monitoring and alerting for cluster health
+/**
+ * RabbitMQ Cluster Terraform Module
+ *
+ * This module creates and configures a highly available RabbitMQ cluster with the following features:
+ * - 3-node cluster for high availability
+ * - Cross-AZ deployment for resilience
+ * - Automatic failover with minimal downtime
+ * - Message replication across nodes
+ * - Partition tolerance and recovery
+ */
 
-# RabbitMQ cluster resource
-resource "aws_mq_broker" "rabbitmq_cluster" {
-  broker_name        = "${var.environment}-mca-rabbitmq-cluster"
-  engine_type        = "RabbitMQ"
-  engine_version     = "3.13.0"  # Latest version with quorum queue support
-  host_instance_type = var.instance_type
+# Variables for the RabbitMQ cluster configuration
+variable "environment" {
+  description = "Deployment environment (development, staging, production)"
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "ID of the VPC where the RabbitMQ cluster will be deployed"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "List of subnet IDs across multiple AZs for the RabbitMQ cluster (must be private subnets)"
+  type        = list(string)
+  validation {
+    condition     = length(var.subnet_ids) >= 2
+    error_message = "At least 2 subnet IDs are required for CLUSTER_MULTI_AZ deployment."
+  }
+}
+
+variable "security_group_ids" {
+  description = "List of security group IDs for the RabbitMQ cluster"
+  type        = list(string)
+  default     = []
+}
+
+variable "instance_type" {
+  description = "Instance type for the RabbitMQ nodes"
+  type        = string
+  default     = "mq.m5.large"
+}
+
+variable "engine_version" {
+  description = "RabbitMQ engine version"
+  type        = string
+  default     = "3.10.20"
+}
+
+variable "deployment_mode" {
+  description = "Deployment mode for the RabbitMQ cluster (SINGLE_INSTANCE, CLUSTER_MULTI_AZ)"
+  type        = string
+  default     = "CLUSTER_MULTI_AZ"
+  validation {
+    condition     = contains(["SINGLE_INSTANCE", "CLUSTER_MULTI_AZ"], var.deployment_mode)
+    error_message = "Deployment mode must be either SINGLE_INSTANCE or CLUSTER_MULTI_AZ."
+  }
+}
+
+variable "admin_username" {
+  description = "Username for the RabbitMQ admin user"
+  type        = string
+  default     = "admin"
+}
+
+variable "admin_password" {
+  description = "Password for the RabbitMQ admin user"
+  type        = string
+  sensitive   = true
+}
+
+variable "publicly_accessible" {
+  description = "Whether the RabbitMQ cluster should be publicly accessible"
+  type        = bool
+  default     = false
+}
+
+variable "auto_minor_version_upgrade" {
+  description = "Whether to automatically upgrade minor versions of the RabbitMQ engine"
+  type        = bool
+  default     = true
+}
+
+variable "apply_immediately" {
+  description = "Whether to apply changes immediately or during the next maintenance window"
+  type        = bool
+  default     = false
+}
+
+variable "maintenance_window_start_time" {
+  description = "Maintenance window start time configuration"
+  type = object({
+    day_of_week = string
+    time_of_day = string
+    time_zone   = string
+  })
+  default = {
+    day_of_week = "SUNDAY"
+    time_of_day = "02:00"
+    time_zone   = "UTC"
+  }
+}
+
+variable "logs_retention" {
+  description = "Number of days to retain logs"
+  type        = number
+  default     = 7
+}
+
+variable "tags" {
+  description = "Tags to apply to the RabbitMQ cluster resources"
+  type        = map(string)
+  default     = {}
+}
+
+# Local variables for configuration
+locals {
+  name_prefix = "rabbitmq-${var.environment}"
   
-  # Configure deployment across multiple availability zones
-  deployment_mode    = "CLUSTER_MULTI_AZ"
-  
-  # Security settings
-  security_groups    = [var.security_group_id]
-  subnet_ids         = var.subnet_ids
-  
-  # Authentication
-  authentication_strategy = "SIMPLE"
-  
-  # User configuration
-  users {
-    username = var.rabbitmq_admin_username
-    password = var.rabbitmq_admin_password
+  # Default RabbitMQ configuration for high availability and partition handling
+  rabbitmq_config = <<-EOT
+    # Cluster configuration
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_aws
+    cluster_formation.aws.region = ${data.aws_region.current.name}
+    cluster_formation.aws.use_autoscaling_group = false
+    cluster_name = rabbitmq-${var.environment}-cluster
     
-    # Grant admin permissions to the main user
-    console_access = true
+    # High availability and quorum configuration
+    cluster_partition_handling = autoheal
+    queue_master_locator = min-masters
+    
+    # Replication and synchronization settings
+    ha-mode = all
+    ha-sync-mode = automatic
+    ha-sync-batch-size = 50
+    
+    # Quorum queue settings for consensus-based replication
+    default_quorum_queue_version = 2
+    default_quorum_initial_group_size = 3
+    
+    # Message persistence and durability
+    disk_free_limit.absolute = 5GB
+    vm_memory_high_watermark.relative = 0.8
+    
+    # Lazy queues for large message handling
+    queue_index_embed_msgs_below = 4096
+    
+    # TLS configuration
+    listeners.ssl.default = 5671
+    ssl_options.verify = verify_peer
+    ssl_options.fail_if_no_peer_cert = false
+    
+    # Heartbeat and timeout settings for failure detection
+    heartbeat = 60
+    consumer_timeout = 1800000
+  EOT
+}
+
+# Data source for current AWS region
+data "aws_region" "current" {}
+
+# Security group for RabbitMQ cluster
+resource "aws_security_group" "rabbitmq" {
+  name        = "${local.name_prefix}-sg"
+  description = "Security group for RabbitMQ cluster"
+  vpc_id      = var.vpc_id
+
+  # AMQP port
+  ingress {
+    from_port   = 5671
+    to_port     = 5671
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.selected.cidr_block]
+    description = "AMQP with TLS"
   }
 
-  # Configure maintenance window during off-peak hours
-  maintenance_window_start_time {
-    day_of_week = var.maintenance_day_of_week
-    time_of_day = var.maintenance_time_of_day
-    time_zone   = var.maintenance_time_zone
+  # Management UI port
+  ingress {
+    from_port   = 15671
+    to_port     = 15671
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.selected.cidr_block]
+    description = "Management UI with TLS"
   }
 
-  # Enable CloudWatch logs
-  logs {
-    general = true
-    audit   = true
+  # Cluster internal communication
+  ingress {
+    from_port   = 25672
+    to_port     = 25672
+    protocol    = "tcp"
+    self        = true
+    description = "Inter-node communication"
   }
 
-  # Apply tags for resource management
+  # Egress rule
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
+  }
+
   tags = merge(
-    var.common_tags,
+    var.tags,
     {
-      Name        = "${var.environment}-mca-rabbitmq-cluster"
-      Environment = var.environment
-      Service     = "mca-messaging"
+      Name = "${local.name_prefix}-sg"
     }
   )
+}
 
-  # Advanced broker configuration
+# Data source for VPC
+data "aws_vpc" "selected" {
+  id = var.vpc_id
+}
+
+# AWS MQ RabbitMQ broker
+resource "aws_mq_broker" "rabbitmq_cluster" {
+  broker_name        = "${local.name_prefix}-cluster"
+  engine_type        = "RabbitMQ"
+  engine_version     = var.engine_version
+  host_instance_type = var.instance_type
+  deployment_mode    = var.deployment_mode
+  
+  security_groups    = concat(var.security_group_ids, [aws_security_group.rabbitmq.id])
+  subnet_ids         = var.deployment_mode == "CLUSTER_MULTI_AZ" ? var.subnet_ids : [var.subnet_ids[0]]
+  
+  publicly_accessible = var.publicly_accessible
+  
+  auto_minor_version_upgrade = var.auto_minor_version_upgrade
+  apply_immediately          = var.apply_immediately
+  
+  maintenance_window_start_time {
+    day_of_week = var.maintenance_window_start_time.day_of_week
+    time_of_day = var.maintenance_window_start_time.time_of_day
+    time_zone   = var.maintenance_window_start_time.time_zone
+  }
+  
+  logs {
+    general = true
+    # Note: Audit logs are not supported for RabbitMQ engine type
+  }
+  
+  user {
+    username = var.admin_username
+    password = var.admin_password
+    # Note: console_access is not supported for RabbitMQ users
+  }
+  
   configuration {
     id       = aws_mq_configuration.rabbitmq_config.id
     revision = aws_mq_configuration.rabbitmq_config.latest_revision
   }
+  
+  encryption_options {
+    use_aws_owned_key = true
+  }
+  
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${local.name_prefix}-cluster"
+      Environment = var.environment
+    }
+  )
+  
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-# RabbitMQ configuration resource for advanced settings
+# RabbitMQ configuration
 resource "aws_mq_configuration" "rabbitmq_config" {
-  name           = "${var.environment}-mca-rabbitmq-config"
+  name           = "${local.name_prefix}-config"
   engine_type    = "RabbitMQ"
-  engine_version = "3.13.0"
+  engine_version = var.engine_version
   
-  # RabbitMQ configuration in JSON format
-  data = jsonencode({
-    # Configure quorum queues as the default queue type
-    "rabbitmq.conf" = {
-      # Default queue type set to quorum for high availability
-      "default_queue_type" = "quorum"
-      
-      # Quorum queue settings for high availability
-      "quorum_queue.max_in_memory_length" = 10000
-      "quorum_queue.max_in_memory_bytes" = 104857600  # 100MB
-      "quorum_queue.member_reconciliation.enabled" = true
-      "quorum_queue.member_reconciliation.interval" = 60000  # 60 seconds
-      "quorum_queue.member_reconciliation.target_size" = 3  # Maintain 3 replicas
-      
-      # Raft consensus settings for quorum queues
-      "raft.segment_max_entries" = 4096
-      "raft.wal_max_size_bytes" = 536870912  # 512MB
-      "raft.wal_max_batch_size" = 4096
-      "raft.snapshot_interval" = 5000  # Take snapshots every 5000 entries
-      
-      # Cluster partition handling strategy
-      "cluster_partition_handling" = "pause_minority"
-      
-      # Cluster formation and peer discovery
-      "cluster_formation.peer_discovery_backend" = "rabbit_peer_discovery_aws"
-      "cluster_formation.aws.region" = var.aws_region
-      "cluster_formation.aws.use_autoscaling_group" = true
-      "cluster_formation.aws.instance_tags.Service" = "mca-messaging"
-      "cluster_formation.aws.instance_tags.Environment" = var.environment
-      
-      # Heartbeat and connection timeout settings
-      "heartbeat" = 60
-      "vm_memory_high_watermark.relative" = 0.7
-      "tcp_listen_options.backlog" = 4096
-      "tcp_listen_options.nodelay" = true
-      
-      # Enable management plugins
-      "management.load_definitions" = "/etc/rabbitmq/definitions.json"
-      "management.disable_stats" = false
-      "management.enable_queue_totals" = true
-      
-      # TLS/SSL settings
-      "listeners.ssl.default" = 5671
-      "ssl_options.cacertfile" = "/etc/rabbitmq/ca_certificate.pem"
-      "ssl_options.certfile" = "/etc/rabbitmq/server_certificate.pem"
-      "ssl_options.keyfile" = "/etc/rabbitmq/server_key.pem"
-      "ssl_options.verify" = "verify_peer"
-      "ssl_options.fail_if_no_peer_cert" = false
-    }
-  })
+  data = local.rabbitmq_config
   
-  # Apply tags for resource management
   tags = merge(
-    var.common_tags,
+    var.tags,
     {
-      Name        = "${var.environment}-mca-rabbitmq-config"
+      Name        = "${local.name_prefix}-config"
       Environment = var.environment
-      Service     = "mca-messaging"
     }
   )
 }
 
-# CloudWatch alarm for cluster health monitoring
-resource "aws_cloudwatch_metric_alarm" "rabbitmq_health" {
-  alarm_name          = "${var.environment}-mca-rabbitmq-health"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 3
-  metric_name         = "RabbitMQClusterStatus"
-  namespace           = "AWS/MQ"
-  period              = 60
-  statistic           = "Average"
-  threshold           = 1
-  alarm_description   = "This alarm monitors RabbitMQ cluster health"
+# CloudWatch Log Group for RabbitMQ logs
+resource "aws_cloudwatch_log_group" "rabbitmq_logs" {
+  name              = "/aws/amazonmq/${local.name_prefix}-cluster"
+  retention_in_days = var.logs_retention
   
-  dimensions = {
-    Broker = aws_mq_broker.rabbitmq_cluster.id
-  }
-  
-  alarm_actions = var.alarm_actions
-  ok_actions    = var.ok_actions
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${local.name_prefix}-logs"
+      Environment = var.environment
+    }
+  )
 }
 
-# CloudWatch alarm for queue depth monitoring
-resource "aws_cloudwatch_metric_alarm" "queue_depth" {
-  count               = length(var.critical_queues)
-  
-  alarm_name          = "${var.environment}-mca-rabbitmq-queue-depth-${var.critical_queues[count.index]}"
+# CloudWatch Alarms for monitoring RabbitMQ cluster health
+resource "aws_cloudwatch_metric_alarm" "rabbitmq_cpu_utilization" {
+  alarm_name          = "${local.name_prefix}-cpu-utilization"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 3
-  metric_name         = "QueueDepth"
-  namespace           = "AWS/MQ"
-  period              = 60
-  statistic           = "Maximum"
-  threshold           = var.queue_depth_threshold
-  alarm_description   = "This alarm monitors the depth of the ${var.critical_queues[count.index]} queue"
+  evaluation_periods  = 2
+  metric_name         = "CpuUtilization"
+  namespace           = "AWS/AmazonMQ"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "This metric monitors RabbitMQ CPU utilization"
   
   dimensions = {
     Broker = aws_mq_broker.rabbitmq_cluster.id
-    Queue  = var.critical_queues[count.index]
-    VirtualHost = var.rabbitmq_vhost
   }
   
-  alarm_actions = var.alarm_actions
-  ok_actions    = var.ok_actions
-}
-
-# Route53 DNS record for the RabbitMQ cluster
-resource "aws_route53_record" "rabbitmq_cluster" {
-  count   = var.create_dns_record ? 1 : 0
-  
-  zone_id = var.dns_zone_id
-  name    = "rabbitmq.${var.dns_domain}"
-  type    = "CNAME"
-  ttl     = 300
-  records = [aws_mq_broker.rabbitmq_cluster.instances.0.endpoints.0]
-}
-
-# Health check for RabbitMQ cluster
-resource "aws_route53_health_check" "rabbitmq" {
-  count             = var.create_dns_record ? 1 : 0
-  
-  fqdn              = "rabbitmq.${var.dns_domain}"
-  port              = 5671
-  type              = "TCP"
-  request_interval  = 30
-  failure_threshold = 3
+  alarm_actions = []
+  ok_actions    = []
   
   tags = merge(
-    var.common_tags,
+    var.tags,
     {
-      Name        = "${var.environment}-mca-rabbitmq-health-check"
+      Name        = "${local.name_prefix}-cpu-alarm"
       Environment = var.environment
-      Service     = "mca-messaging"
     }
   )
 }
 
-# Auto recovery lambda function for RabbitMQ cluster
-resource "aws_lambda_function" "rabbitmq_recovery" {
-  function_name    = "${var.environment}-mca-rabbitmq-recovery"
-  role             = aws_iam_role.rabbitmq_recovery.arn
-  handler          = "index.handler"
-  runtime          = "nodejs18.x"
-  timeout          = 300
-  memory_size      = 128
+resource "aws_cloudwatch_metric_alarm" "rabbitmq_memory_usage" {
+  alarm_name          = "${local.name_prefix}-memory-usage"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "HeapUsage"
+  namespace           = "AWS/AmazonMQ"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "This metric monitors RabbitMQ memory usage"
   
-  filename         = "${path.module}/files/rabbitmq-recovery.zip"
-  source_code_hash = filebase64sha256("${path.module}/files/rabbitmq-recovery.zip")
-  
-  environment {
-    variables = {
-      BROKER_ID = aws_mq_broker.rabbitmq_cluster.id
-      REGION    = var.aws_region
-    }
+  dimensions = {
+    Broker = aws_mq_broker.rabbitmq_cluster.id
   }
   
+  alarm_actions = []
+  ok_actions    = []
+  
   tags = merge(
-    var.common_tags,
+    var.tags,
     {
-      Name        = "${var.environment}-mca-rabbitmq-recovery"
+      Name        = "${local.name_prefix}-memory-alarm"
       Environment = var.environment
-      Service     = "mca-messaging"
     }
   )
 }
 
-# IAM role for RabbitMQ recovery lambda
-resource "aws_iam_role" "rabbitmq_recovery" {
-  name = "${var.environment}-mca-rabbitmq-recovery-role"
+# Queue depth monitoring alarm
+resource "aws_cloudwatch_metric_alarm" "rabbitmq_queue_depth" {
+  alarm_name          = "${local.name_prefix}-queue-depth"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "QueueDepth"
+  namespace           = "AWS/AmazonMQ"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 10000
+  alarm_description   = "This metric monitors RabbitMQ queue depth"
   
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
+  dimensions = {
+    Broker = aws_mq_broker.rabbitmq_cluster.id
+  }
+  
+  alarm_actions = []
+  ok_actions    = []
   
   tags = merge(
-    var.common_tags,
+    var.tags,
     {
-      Name        = "${var.environment}-mca-rabbitmq-recovery-role"
+      Name        = "${local.name_prefix}-queue-depth-alarm"
       Environment = var.environment
-      Service     = "mca-messaging"
     }
   )
 }
 
-# IAM policy for RabbitMQ recovery lambda
-resource "aws_iam_policy" "rabbitmq_recovery" {
-  name        = "${var.environment}-mca-rabbitmq-recovery-policy"
-  description = "Policy for RabbitMQ recovery lambda"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "mq:RebootBroker",
-          "mq:DescribeBroker"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      }
-    ]
-  })
+# Outputs
+output "rabbitmq_endpoints" {
+  description = "The endpoints of the RabbitMQ cluster"
+  value = {
+    amqp_endpoints     = aws_mq_broker.rabbitmq_cluster.instances.*.endpoints
+    management_console = "https://${aws_mq_broker.rabbitmq_cluster.instances.0.console_url}"
+  }
 }
 
-# Attach IAM policy to IAM role for RabbitMQ recovery
-resource "aws_iam_role_policy_attachment" "rabbitmq_recovery" {
-  role       = aws_iam_role.rabbitmq_recovery.name
-  policy_arn = aws_iam_policy.rabbitmq_recovery.arn
+output "rabbitmq_id" {
+  description = "The ID of the RabbitMQ cluster"
+  value       = aws_mq_broker.rabbitmq_cluster.id
 }
 
-# CloudWatch event rule to trigger recovery lambda on alarm
-resource "aws_cloudwatch_event_rule" "rabbitmq_alarm" {
-  name        = "${var.environment}-mca-rabbitmq-alarm"
-  description = "Trigger recovery lambda on RabbitMQ alarm"
-  
-  event_pattern = jsonencode({
-    source      = ["aws.cloudwatch"],
-    detail_type = ["CloudWatch Alarm State Change"],
-    resources   = [aws_cloudwatch_metric_alarm.rabbitmq_health.arn],
-    detail = {
-      state = {
-        value = ["ALARM"]
-      }
-    }
-  })
+output "rabbitmq_arn" {
+  description = "The ARN of the RabbitMQ cluster"
+  value       = aws_mq_broker.rabbitmq_cluster.arn
 }
 
-# CloudWatch event target for recovery lambda
-resource "aws_cloudwatch_event_target" "rabbitmq_recovery" {
-  rule      = aws_cloudwatch_event_rule.rabbitmq_alarm.name
-  target_id = "${var.environment}-mca-rabbitmq-recovery"
-  arn       = aws_lambda_function.rabbitmq_recovery.arn
-}
-
-# CloudWatch dashboard for RabbitMQ monitoring
-resource "aws_cloudwatch_dashboard" "rabbitmq" {
-  dashboard_name = "${var.environment}-mca-rabbitmq-dashboard"
-  
-  dashboard_body = jsonencode({
-    widgets = [
-      {
-        type   = "metric"
-        x      = 0
-        y      = 0
-        width  = 12
-        height = 6
-        properties = {
-          metrics = [
-            ["AWS/MQ", "RabbitMQClusterStatus", "Broker", aws_mq_broker.rabbitmq_cluster.id]
-          ]
-          period = 60
-          stat   = "Average"
-          region = var.aws_region
-          title  = "RabbitMQ Cluster Status"
-        }
-      },
-      {
-        type   = "metric"
-        x      = 12
-        y      = 0
-        width  = 12
-        height = 6
-        properties = {
-          metrics = [
-            ["AWS/MQ", "ConnectionCount", "Broker", aws_mq_broker.rabbitmq_cluster.id]
-          ]
-          period = 60
-          stat   = "Average"
-          region = var.aws_region
-          title  = "RabbitMQ Connection Count"
-        }
-      },
-      {
-        type   = "metric"
-        x      = 0
-        y      = 6
-        width  = 24
-        height = 6
-        properties = {
-          metrics = [
-            ["AWS/MQ", "QueueDepth", "Broker", aws_mq_broker.rabbitmq_cluster.id, "Queue", "document-processing", "VirtualHost", var.rabbitmq_vhost],
-            ["AWS/MQ", "QueueDepth", "Broker", aws_mq_broker.rabbitmq_cluster.id, "Queue", "data-extraction", "VirtualHost", var.rabbitmq_vhost],
-            ["AWS/MQ", "QueueDepth", "Broker", aws_mq_broker.rabbitmq_cluster.id, "Queue", "notification", "VirtualHost", var.rabbitmq_vhost]
-          ]
-          period = 60
-          stat   = "Maximum"
-          region = var.aws_region
-          title  = "Queue Depths"
-        }
-      }
-    ]
-  })
+output "rabbitmq_security_group_id" {
+  description = "The ID of the security group for the RabbitMQ cluster"
+  value       = aws_security_group.rabbitmq.id
 }
