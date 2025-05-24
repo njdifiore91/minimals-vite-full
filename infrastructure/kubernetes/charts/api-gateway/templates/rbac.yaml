@@ -1,26 +1,29 @@
-{{- if .Values.rbac.create }}
-# Role for Kong API Gateway
+{{- /*
+RBAC template for Kong API Gateway
+
+This template creates Role and RoleBinding resources for the Kong API Gateway.
+It grants the Kong ServiceAccount the minimum required permissions to function
+within the cluster, following the principle of least privilege.
+*/}}
+
+{{- if and .Values.rbac.create .Values.serviceAccount.create -}}
+
+{{- if .Values.rbac.namespaced -}}
+# Namespace-scoped Role for Kong API Gateway
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kong.labels" . | nindent 4 }}
-  {{- with .Values.rbac.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    app.kubernetes.io/component: rbac
 rules:
-  # Allow Kong to get, list and watch services
+  # Allow Kong to get and update services and endpoints for service discovery
   - apiGroups: [""] # "" indicates the core API group
-    resources: ["services"]
+    resources: ["services", "endpoints"]
     verbs: ["get", "list", "watch"]
-  # Allow Kong to get, list and watch endpoints
-  - apiGroups: [""] # "" indicates the core API group
-    resources: ["endpoints"]
-    verbs: ["get", "list", "watch"]
-  # Allow Kong to get, list and watch configmaps
+  # Allow Kong to read ConfigMaps for configuration
   - apiGroups: [""] # "" indicates the core API group
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
@@ -28,74 +31,61 @@ rules:
   {{- toYaml .Values.rbac.extraRules | nindent 2 }}
   {{- end }}
 ---
-# RoleBinding for Kong API Gateway
+# Namespace-scoped RoleBinding for Kong API Gateway
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kong.labels" . | nindent 4 }}
-  {{- with .Values.rbac.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    app.kubernetes.io/component: rbac
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
 subjects:
-  - kind: ServiceAccount
-    name: {{ include "kong.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
-{{- end }}
-
-{{- if and .Values.rbac.create .Values.rbac.createClusterRole }}
-# ClusterRole for Kong API Gateway (if needed for cluster-wide access)
+- kind: ServiceAccount
+  name: {{ template "kong.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- else -}}
+# Cluster-scoped ClusterRole for Kong API Gateway
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
   labels:
     {{- include "kong.labels" . | nindent 4 }}
-  {{- with .Values.rbac.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    app.kubernetes.io/component: rbac
 rules:
-  # Allow Kong to get, list and watch services across all namespaces
+  # Allow Kong to get and update services and endpoints for service discovery
   - apiGroups: [""] # "" indicates the core API group
-    resources: ["services"]
+    resources: ["services", "endpoints"]
     verbs: ["get", "list", "watch"]
-  # Allow Kong to get, list and watch endpoints across all namespaces
-  - apiGroups: [""] # "" indicates the core API group
-    resources: ["endpoints"]
-    verbs: ["get", "list", "watch"]
-  # Allow Kong to get, list and watch configmaps across all namespaces
+  # Allow Kong to read ConfigMaps for configuration
   - apiGroups: [""] # "" indicates the core API group
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
-  {{- if .Values.rbac.extraClusterRules }}
-  {{- toYaml .Values.rbac.extraClusterRules | nindent 2 }}
+  {{- if .Values.rbac.extraRules }}
+  {{- toYaml .Values.rbac.extraRules | nindent 2 }}
   {{- end }}
 ---
-# ClusterRoleBinding for Kong API Gateway
+# Cluster-scoped ClusterRoleBinding for Kong API Gateway
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
   labels:
     {{- include "kong.labels" . | nindent 4 }}
-  {{- with .Values.rbac.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    app.kubernetes.io/component: rbac
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "kong.fullname" . }}
+  name: {{ template "kong.fullname" . }}
 subjects:
-  - kind: ServiceAccount
-    name: {{ include "kong.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
-{{- end }}
+- kind: ServiceAccount
+  name: {{ template "kong.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end -}}
+
+{{- end -}}
