@@ -2,17 +2,21 @@ apiVersion: v2
 name: rabbitmq
 version: 1.0.0
 appVersion: "3.12.x"
-description: RabbitMQ message queue system for the MCA Application Processing System providing asynchronous messaging between microservices with guaranteed delivery, supporting document processing pipeline with specific exchanges and queues
+description: RabbitMQ Helm chart for MCA processing pipeline message queue with high availability and guaranteed message delivery
 type: application
 keywords:
   - rabbitmq
   - message-queue
   - amqp
-  - messaging
+  - mca-processing
+  - asynchronous-messaging
+home: https://www.rabbitmq.com/
 maintainers:
   - name: Dollar Funding Operations Team
     email: ops@dollarfunding.com
-home: https://www.rabbitmq.com
-sources:
-  - https://github.com/rabbitmq/rabbitmq-server
-icon: https://www.rabbitmq.com/img/logo-rabbitmq.svg
+annotations:
+  category: Infrastructure
+  deploymentType: StatefulSet
+  minClusterSize: "3"
+  sla: "99.9%"
+  documentation: https://www.rabbitmq.com/documentation.html
