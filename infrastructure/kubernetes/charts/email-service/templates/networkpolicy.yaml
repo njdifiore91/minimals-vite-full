@@ -1,155 +1,222 @@
 {{- /*
-networkpolicy.yaml
+networkpolicy.yaml for Email Service
 
-This template defines the NetworkPolicy for the Email Service, extending the common
-networkpolicy template with Email Service specific network rules. It ensures proper
-network isolation and security for the Email Service while allowing necessary
-communications with external IMAP servers, RabbitMQ, and S3-compatible storage.
+This NetworkPolicy template extends the common NetworkPolicy template with Email Service specific
+network rules. It defines the ingress and egress policies for the Email Service, including:
 
-The NetworkPolicy implements the following requirements:
-- Email Service must have proper network isolation and security
-- Service must be able to connect to external IMAP server
-- Service must communicate with RabbitMQ for message publishing
-- Service must access S3-compatible storage for document storage
-- Network policies must follow security best practices
+1. Ingress rules to control incoming traffic to the Email Service
+2. Egress rules to allow the Email Service to connect to:
+   - External IMAP server (submissions@dollarfunding.com)
+   - RabbitMQ for message publishing
+   - S3-compatible storage for document storage
+
+This template ensures that the Email Service has the proper network isolation and security
+while still being able to communicate with the required external and internal services.
+
+The Email Service is a Node.js microservice that monitors email submissions, extracts
+attachments, and publishes messages to RabbitMQ as specified in section 0.1.2 of the
+technical specification.
+
+Security Considerations:
+- Implements the principle of least privilege by only allowing necessary connections
+- Provides defense-in-depth by explicitly defining both ingress and egress rules
+- Isolates the Email Service from unnecessary network traffic
+- Secures external connections by excluding private network ranges
+- Follows the network security requirements specified in the technical specification
+
+This NetworkPolicy is a critical component of the overall security architecture of the
+MCA Application Processing System, ensuring that the Email Service is properly isolated
+while still being able to perform its required functions.
 */}}
 
-{{- $fullName := include "common.fullname" . -}}
+{{- define "email-service.networkPolicy.tpl" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # Pod selector targets Email Service pods
+  # This ensures that the NetworkPolicy only applies to Email Service pods
+  # and not to other pods in the same namespace
+  podSelector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+  
+  # Policy types include both Ingress and Egress
+  # This ensures that both incoming and outgoing traffic is controlled
+  # following the defense-in-depth security principle
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # Ingress rules control incoming traffic to the Email Service
+  # The Email Service primarily receives traffic from the API Gateway for management
+  # and from Kubernetes health check system for liveness/readiness probes
+  ingress:
+    # Allow traffic from the API Gateway
+    # This allows the API Gateway to manage and monitor the Email Service
+    # as specified in the technical specification section 0.1.2
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/component: gateway
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+    
+    # Allow traffic from the Kubernetes health check system
+    # This is required for Kubernetes to perform health checks on the Email Service
+    # ensuring high availability and proper functioning
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+      ports:
+      - protocol: TCP
+        port: {{ .Values.service.port | default 3000 }}
+        
+    # Allow traffic from the monitoring system for metrics collection
+    # This enables observability of the Email Service as specified in
+    # the technical specification section 0.2.5
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: monitoring
+      ports:
+      - protocol: TCP
+        # Metrics endpoint port (typically the same as the service port)
+        port: {{ .Values.service.port | default 3000 }}
+  
+  # Egress rules control outgoing traffic from the Email Service
+  # These rules implement the principle of least privilege by only allowing
+  # necessary connections to external and internal services
+  egress:
+    # Allow DNS resolution (required for all services)
+    # This is essential for the Email Service to resolve hostnames of other services
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    
+    # Allow connection to external IMAP server
+    # The Email Service needs to connect to the submissions@dollarfunding.com mailbox
+    # via IMAP as specified in section 0.1.2 of the technical specification
+    # This enables the core functionality of monitoring email submissions
+    - to:
+      - ipBlock:
+          # This CIDR block should be updated to match the actual IMAP server IP range
+          # For now, we're using a placeholder that allows all external traffic
+          cidr: 0.0.0.0/0
+          except:
+          # Exclude private networks for security to prevent SSRF attacks
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 127.0.0.0/8
+          - 169.254.0.0/16
+      ports:
+      - protocol: TCP
+        # Standard IMAP ports (143 for IMAP, 993 for IMAPS)
+        # Using 993 for IMAPS (IMAP over SSL/TLS) for secure communication
+        port: 993
+    
+    # Allow connection to RabbitMQ for message publishing
+    # The Email Service publishes messages to RabbitMQ as specified in
+    # section 0.1.3 of the technical specification
+    # This enables the service to publish extracted email data to the processing pipeline
+    - to:
+      - namespaceSelector: {}
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: rabbitmq
+      ports:
+      - protocol: TCP
+        port: 5672  # Standard RabbitMQ port
+    
+    # Allow connection to S3-compatible storage for document storage
+    # The Email Service stores attachments in S3-compatible storage as specified in
+    # section 0.1.3 of the technical specification
+    # This enables the service to store email attachments for further processing
+    - to:
+      - ipBlock:
+          # This CIDR block should be updated to match the actual S3 endpoint IP range
+          # For now, we're using a placeholder that allows all external traffic
+          cidr: 0.0.0.0/0
+          except:
+          # Exclude private networks for security to prevent SSRF attacks
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 127.0.0.0/8
+          - 169.254.0.0/16
+      ports:
+      - protocol: TCP
+        port: 443  # HTTPS port for S3 API
+        
+    # Allow connection to the logging and monitoring system
+    # This enables the Email Service to send logs and metrics for observability
+    # as specified in the technical specification section 0.2.5
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: monitoring
+      ports:
+      - protocol: TCP
+        port: 9090  # Standard Prometheus port
+{{- end }}
+
+{{- define "email-service.networkPolicy" }}
+{{- if .Values.networkPolicy.enabled }}
+{{- include "email-service.networkPolicy.tpl" . }}
 
 {{- /*
-Define Email Service specific network policy values that will be passed to the common template.
-These values extend or override the default values defined in values.yaml.
+Create a secondary NetworkPolicy that explicitly denies all other traffic
+This implements a defense-in-depth approach by ensuring that only the
+specifically allowed traffic is permitted, and all other traffic is denied.
+
+This follows the security best practice of denying all traffic by default
+and only allowing specific traffic that is explicitly permitted.
 */}}
-{{- $networkPolicyValues := dict -}}
-{{- $_ := set $networkPolicyValues "enabled" (default true .Values.networkPolicy.enabled) -}}
-{{- $_ := set $networkPolicyValues "podSelector" (dict "matchLabels" (include "common.selectorLabels" . | fromYaml)) -}}
-{{- $_ := set $networkPolicyValues "policyTypes" (list "Ingress" "Egress") -}}
-
-{{- /*
-Define Email Service specific ingress rules for health checks and metrics endpoints.
-*/}}
-{{- $ingressRules := list -}}
-
-{{- /* Allow traffic from API Gateway for health checks */ -}}
-{{- $apiGatewayRule := dict -}}
-{{- $_ := set $apiGatewayRule "from" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "api-gateway")))) -}}
-{{- $_ := set $apiGatewayRule "ports" (list (dict "protocol" "TCP" "port" (default 3000 .Values.service.port))) -}}
-{{- $ingressRules = append $ingressRules $apiGatewayRule -}}
-
-{{- /* Allow traffic from monitoring services for metrics */ -}}
-{{- $monitoringRule := dict -}}
-{{- $_ := set $monitoringRule "from" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "monitoring")))) -}}
-{{- $_ := set $monitoringRule "ports" (list (dict "protocol" "TCP" "port" (default 3000 .Values.service.port))) -}}
-{{- $ingressRules = append $ingressRules $monitoringRule -}}
-
-{{- $_ := set $networkPolicyValues "ingress" $ingressRules -}}
-
-{{- /*
-Define Email Service specific egress rules for IMAP, RabbitMQ, and S3 connections.
-*/}}
-{{- $egressRules := list -}}
-
-{{- /* Allow DNS traffic (required for all services) */ -}}
-{{- $dnsRule := dict -}}
-{{- $_ := set $dnsRule "to" (list (dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" "kube-system")) "podSelector" (dict "matchLabels" (dict "k8s-app" "kube-dns")))) -}}
-{{- $_ := set $dnsRule "ports" (list (dict "protocol" "UDP" "port" 53) (dict "protocol" "TCP" "port" 53)) -}}
-{{- $egressRules = append $egressRules $dnsRule -}}
-
-{{- /* Allow traffic to external IMAP servers */ -}}
-{{- $imapRule := dict -}}
-{{- $_ := set $imapRule "to" (list (dict "ipBlock" (dict "cidr" "0.0.0.0/0" "except" (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "127.0.0.0/8")))) -}}
-{{- $_ := set $imapRule "ports" (list (dict "protocol" "TCP" "port" (default 993 .Values.imap.port))) -}}
-{{- $egressRules = append $egressRules $imapRule -}}
-
-{{- /* Allow traffic to RabbitMQ for message publishing */ -}}
-{{- $rabbitmqRule := dict -}}
-{{- $_ := set $rabbitmqRule "to" (list (dict "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")))) -}}
-{{- $_ := set $rabbitmqRule "ports" (list (dict "protocol" "TCP" "port" (default 5672 .Values.rabbitmq.port))) -}}
-{{- $egressRules = append $egressRules $rabbitmqRule -}}
-
-{{- /* Allow traffic to S3-compatible storage for document storage */ -}}
-{{- $s3Rule := dict -}}
-{{- $_ := set $s3Rule "to" (list (dict "ipBlock" (dict "cidr" "0.0.0.0/0" "except" (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "127.0.0.0/8")))) -}}
-{{- $_ := set $s3Rule "ports" (list (dict "protocol" "TCP" "port" 443)) -}}
-{{- $egressRules = append $egressRules $s3Rule -}}
-
-{{- /* Allow traffic to other services within the same namespace */ -}}
-{{- $namespaceRule := dict -}}
-{{- $_ := set $namespaceRule "to" (list (dict "podSelector" (dict))) -}}
-{{- $egressRules = append $egressRules $namespaceRule -}}
-
-{{- $_ := set $networkPolicyValues "egress" $egressRules -}}
-
-{{- /* Set the network policy values in .Values.networkPolicy */ -}}
-{{- $_ := set .Values "networkPolicy" $networkPolicyValues -}}
-
-{{- /*
-Include the common networkpolicy template with the Email Service specific values.
-This leverages the common template for consistent network policy implementation
-across all services while allowing for service-specific customization.
-*/}}
-{{- include "common.networkpolicy" . -}}
-
-{{- /*
-Define an additional NetworkPolicy specifically for the Email Service to handle
-special cases not covered by the common template.
-
-This additional policy ensures that the Email Service can communicate with external
-IMAP servers, RabbitMQ, and S3-compatible storage, which are specific requirements
-for the Email Service that may not be fully covered by the common template.
-*/}}
-
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ $fullName }}-email-specific
+  name: {{ include "common.fullname" . }}-deny-all-other
   labels:
     {{- include "common.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    description: "Email Service specific network policy for IMAP, RabbitMQ, and S3 connections"
+    "helm.sh/hook-weight": "10"
+    description: "Explicitly deny all traffic not allowed by the primary NetworkPolicy"
 spec:
+  # Apply to the same pods as the primary NetworkPolicy
   podSelector:
     matchLabels:
       {{- include "common.selectorLabels" . | nindent 6 }}
+  # Apply to both ingress and egress traffic
   policyTypes:
+    - Ingress
     - Egress
-  # Egress rules for the Email Service
-  egress:
-    # Allow traffic to external IMAP servers
-    # This is required for monitoring the submissions inbox
-    - to:
-      - ipBlock:
-          cidr: 0.0.0.0/0
-          # Exclude private networks as a security best practice
-          except:
-            - 10.0.0.0/8
-            - 172.16.0.0/12
-            - 192.168.0.0/16
-            - 127.0.0.0/8
-      ports:
-        - protocol: TCP
-          port: {{ .Values.imap.port | default 993 }}  # IMAPS (IMAP over SSL/TLS)
-    # Allow traffic to RabbitMQ for message publishing
-    - to:
-      - podSelector:
-          matchLabels:
-            app.kubernetes.io/name: rabbitmq
-      ports:
-        - protocol: TCP
-          port: {{ .Values.rabbitmq.port | default 5672 }}
-    # Allow traffic to S3-compatible storage for document storage
-    - to:
-      - ipBlock:
-          cidr: 0.0.0.0/0
-          # Exclude private networks as a security best practice
-          except:
-            - 10.0.0.0/8
-            - 172.16.0.0/12
-            - 192.168.0.0/16
-            - 127.0.0.0/8
-      ports:
-        - protocol: TCP
-          port: 443  # HTTPS for S3 API
+  # No ingress or egress rules means deny all traffic not explicitly allowed
+  # by the primary NetworkPolicy
+{{- end }}
+{{- end }}
+
+{{- include "email-service.networkPolicy" . }}
